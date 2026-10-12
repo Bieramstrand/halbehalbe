@@ -41,7 +41,7 @@ body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);font
 button,input,select,textarea{font:inherit;color:inherit}
 button{cursor:pointer}
 :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
-#app{max-width:560px;margin:0 auto;padding:34px 18px 120px}
+#app{max-width:560px;margin:0 auto;padding:54px 18px 120px}
 :root.emb{padding-top:0}
 :root.emb #app{padding-top:6px}
 h1,h2,h3{font-family:var(--serif);font-weight:600;margin:0;letter-spacing:-0.01em}
@@ -157,6 +157,7 @@ textarea{min-height:120px;resize:vertical}
 .back span{font-size:22px;line-height:1;margin-top:-2px;color:var(--accent)}
 .back:active{background:var(--soft)}
 .bar[hidden]{display:none}
+.sbox{margin:14px 0 4px;border-radius:999px;padding:11px 16px}
 </style>
 </head>
 <body>
@@ -200,7 +201,7 @@ var ui={view:'home',gid:null,tab:'ausgaben',showSettled:false};
 var sheet=null, form=null, confirmDel=false;
 
 /* Speicher: Firebase (gemeinsam) oder lokal als Rückfall */
-var COL='household', DOCID='halbehalbe', seedChecked=false;
+var COL='household', DOCID='halbehalbe', seedChecked=false, backedUp=false, backupList=null, confirmRestore=null;
 function loadPrefsLocal(){try{prefs=JSON.parse(localStorage.getItem(PKEY)||'{}')||{}}catch(e){prefs={}}}
 function savePrefs(){try{localStorage.setItem(PKEY,JSON.stringify(prefs))}catch(e){}}
 function saveLocal(){
@@ -271,6 +272,47 @@ function removeGroup(g){
   if(!cloud){saveLocal();return}
   editGroups(function(gs){return gs.filter(function(x){return x.id!==g.id})});
 }
+function idxRef(){return cloud.collection(COL).doc('halbehalbe-backups')}
+function bdoc(date){return cloud.collection(COL).doc('halbehalbe-backup-'+date)}
+function dayLabel(date){return new Date(date+'T12:00:00').toLocaleDateString('de-DE',{weekday:'short',day:'numeric',month:'long',year:'numeric'})}
+function autoBackup(){
+  if(!cloud||backedUp||!state.groups.length)return;
+  backedUp=true;
+  var day=today(),snapshot=state.groups.map(groupFull),ts=Date.now();
+  cloud.runTransaction(function(tx){
+    var ref=idxRef();
+    return tx.get(ref).then(function(s){
+      var items=(s.exists&&s.data().value&&s.data().value.items)||[];
+      if(items.some(function(i){return i.date===day}))return null;
+      var all=clone(items).concat([{date:day,ts:ts}]).sort(function(a,b){return a.date<b.date?1:-1});
+      var keep=all.slice(0,7),drop=all.slice(7);
+      tx.set(ref,{value:{items:keep},updatedAt:Date.now()});
+      return {drop:drop};
+    });
+  }).then(function(r){
+    if(!r)return;
+    bdoc(day).set({value:{date:day,ts:ts,groups:snapshot},updatedAt:Date.now()}).catch(function(){});
+    r.drop.forEach(function(i){bdoc(i.date).delete().catch(function(){})});
+  }).catch(function(){backedUp=false});
+}
+function loadBackupList(){
+  if(!cloud)return;
+  idxRef().get().then(function(s){
+    var items=(s.exists&&s.data().value&&s.data().value.items)||[];
+    backupList=clone(items).sort(function(a,b){return a.date<b.date?1:-1});
+    if(sheet==='backup')renderSheet();
+  }).catch(function(){backupList=[];if(sheet==='backup')renderSheet()});
+}
+function autoBackupHtml(){
+  if(!cloud)return '';
+  var h='<h3 style="margin:4px 0 6px;font-size:17px">Automatische Sicherungen</h3><p class="muted" style="margin:0 0 6px;font-size:14px">Einmal am Tag legt die App beim Öffnen eine Kopie an. Die letzten 7 Tage bleiben erhalten.</p>';
+  if(backupList===null)return h+'<p class="muted" style="font-size:14px">Lade …</p>';
+  if(!backupList.length)h+='<p class="muted" style="font-size:14px">Noch keine Sicherung vorhanden.</p>';
+  backupList.forEach(function(b){
+    h+='<div class="mem"><span class="n">'+esc(dayLabel(b.date))+'</span><button class="link" data-a="restoreBackup" data-d="'+esc(b.date)+'">'+(confirmRestore===b.date?'Wirklich zurückspielen':'Wiederherstellen')+'</button></div>';
+  });
+  return h+'<div style="height:16px"></div>';
+}
 function seedLocal(){
   var members=[{id:'m_christian',name:'Christian'},{id:'m_julia',name:'Julia C.'}];
   function mk(id,name,color,order,special,amt,desc){
@@ -308,6 +350,7 @@ function startCloud(db){
       if(!seedChecked){seedChecked=true;if(!snap.exists)seedCloud()}
     }else if(snap.exists)ready=true;
     renderApp();
+    if(ready&&!snap.metadata.fromCache&&state.groups.length&&!backedUp)autoBackup();
   },function(){ready=true;renderApp();toast('Die Synchronisierung ist gerade nicht erreichbar. Prüfe die Firestore Regeln.')});
 }
 function initStorage(){
@@ -394,6 +437,8 @@ function balText(c){return c>0?'Du bekommst':(c<0?'Du schuldest':'Ausgeglichen')
 function balCls(c){return c>0?'plus':(c<0?'minus':'muted')}
 function toast(t){var el=$('#toast');el.textContent=t;el.classList.add('on');clearTimeout(toast.t);toast.t=setTimeout(function(){el.classList.remove('on')},2600)}
 function lastAct(g){var m=0;g.expenses.forEach(function(e){var t=e.ts||new Date(e.date+'T12:00:00').getTime();if(t>m)m=t});return m}
+function lastTouch(g){var m=0;g.expenses.forEach(function(e){var t=Math.max(e.mts||0,e.ts||0)||new Date(e.date+'T12:00:00').getTime();if(t>m)m=t});return m}
+function sortedGroups(){return state.groups.slice().sort(function(a,b){var d=lastTouch(b)-lastTouch(a);return d||((a.order||0)-(b.order||0))})}
 function isSettled(g){if(!g.expenses.length)return false;var b=balances(g);return Object.keys(b).every(function(k){return b[k]===0})}
 function isHidden(g){return !g.special&&isSettled(g)&&Date.now()-lastAct(g)>7*864e5}
 function debtLines(g){
@@ -470,7 +515,7 @@ function statView(){
 
 /* Ansichten */
 function homeView(){
-  var h='<div class="top"><span class="brand">Halbe Halbe</span><div class="r2"><button class="link" data-a="stat">Statistik</button><button class="link" data-a="who">'+(prefs.meName?'Ich: '+esc(prefs.meName):'Wer bin ich?')+'</button></div></div>';
+  var h='<div class="top"><span class="brand">Halbe Halbe</span><div class="r2"><button class="link" data-a="search">Suche</button><button class="link" data-a="stat">Statistik</button><button class="link" data-a="who">'+(prefs.meName?'Ich: '+esc(prefs.meName):'Wer bin ich?')+'</button></div></div>';
   if(!ready)return h+'<div class="empty"><b>Lade Daten</b>Einen Moment bitte.</div>';
   var total=0;state.groups.forEach(function(g){total+=myBal(g)});
   var has=state.groups.length>0;
@@ -481,7 +526,7 @@ function homeView(){
   }else{
     var hidden=state.groups.filter(isHidden).length;
     h+='<h2 class="sec">Gruppen</h2><ul class="list">';
-    state.groups.forEach(function(g){
+    sortedGroups().forEach(function(g){
       if(!ui.showSettled&&isHidden(g))return;
       var b=myBal(g),lines=debtLines(g);
       var right=b<0?'Du hast Schulden bei<b>'+eur(b)+'</b>':(b>0?'Du bekommst<b>'+eur(b)+'</b>':'quitt');
@@ -503,32 +548,63 @@ function groupView(){
   var h='<div class="top"><button class="back" data-a="home"><span aria-hidden="true">‹</span>Zurück</button><div class="r2"><button class="link" data-a="stat" data-id="'+esc(g.id)+'">Statistik</button><button class="link" data-a="members">Gruppe verwalten</button></div></div>';
   h+='<div class="hero"><h1>'+esc(g.name)+'</h1><div class="big '+balCls(b)+'">'+eur(b)+'</div><div class="small">'+(me?balText(b)+' · ':'Dein Name ist hier kein Mitglied · ')+'Gesamtausgaben '+eur(spent)+'</div></div>';
   h+='<div class="tabs" role="tablist"><button class="tab" role="tab" data-a="tab" data-t="ausgaben" aria-selected="'+(ui.tab==='ausgaben')+'">Ausgaben</button><button class="tab" role="tab" data-a="tab" data-t="salden" aria-selected="'+(ui.tab==='salden')+'">Salden</button></div>';
-  h+=ui.tab==='ausgaben'?expenseList(g):balanceView(g);
+  h+=ui.tab==='ausgaben'?(g.expenses.length?'<input class="sbox" data-q="1" type="search" placeholder="Ausgaben durchsuchen" value="'+esc(q.text)+'" autocomplete="off" aria-label="Ausgaben durchsuchen">':'')+'<div id="glist">'+expenseList(g)+'</div>':balanceView(g);
   return h;
+}
+var q={text:''};
+function norm(x){return String(x==null?'':x).toLowerCase()}
+function matchE(g,e,withGroup){
+  var t=norm(q.text).trim();if(!t)return true;
+  var d=new Date((e.date||'')+'T12:00:00');
+  var hay=[e.desc,nm(g,e.payer),e.type==='payment'?'zahlung ausgleich':'',toStr(e.amount),String(e.amount/100),String(Math.round(e.amount/100)),e.date||'',d.toLocaleDateString('de-DE'),d.toLocaleDateString('de-DE',{month:'long',year:'numeric'}),withGroup?g.name:''];
+  if(e.type==='payment')Object.keys(e.splits||{}).forEach(function(k){hay.push(nm(g,k))});
+  var h=norm(hay.join(' | '));
+  return t.split(/\s+/).every(function(w){return h.indexOf(w)>=0});
+}
+function summaryHtml(n,sum){return '<p class="muted" style="font-size:14px;margin:12px 0 0">'+n+' Treffer'+(sum?' · zusammen '+eur(sum):'')+'</p>'}
+function expenseRow(g,e,action,showGroup){
+  var me=meId(g);
+  var d=new Date(e.date+'T12:00:00');
+  var day=d.getDate(),mon=d.toLocaleDateString('de-DE',{month:'short'});
+  var sub,right;
+  if(e.type==='payment'){
+    var to=Object.keys(e.splits)[0];
+    sub=esc(nm(g,e.payer))+' zahlte '+esc(nm(g,to));
+    right='<div class="r muted"><b>'+eur(e.amount)+'</b>Zahlung</div>';
+  }else{
+    sub=(me&&e.payer===me)?'Du hast '+eur(e.amount)+' gezahlt':esc(nm(g,e.payer))+' zahlte '+eur(e.amount);
+    var delta=me?((e.payer===me?e.amount:0)-(e.splits[me]||0)):0;
+    if(!me||(delta===0&&!(me in e.splits)&&e.payer!==me))right='<div class="r muted">Nicht beteiligt</div>';
+    else right='<div class="r '+balCls(delta)+'"><b>'+eur(delta)+'</b>'+(delta>0?'Du leihst':(delta<0?'Du schuldest':'Ausgeglichen'))+'</div>';
+  }
+  if(showGroup)sub+=' · '+esc(g.name);
+  return '<li><button class="item" data-a="'+action+'" data-g="'+esc(g.id)+'" data-id="'+esc(e.id)+'"><div class="left"><div class="date"><b>'+day+'</b>'+esc(mon)+'</div><div><div class="t">'+esc(e.desc)+'</div><div class="s">'+sub+'</div></div></div>'+right+'</button></li>';
 }
 function expenseList(g){
   if(!g.expenses.length)return '<div class="empty"><b>Noch keine Ausgaben</b>Trage die erste Ausgabe ein, sobald jemand etwas bezahlt hat.</div>';
-  var me=meId(g);
-  var list=g.expenses.slice().sort(function(a,b){return a.date<b.date?1:(a.date>b.date?-1:(b.ts||0)-(a.ts||0))});
-  var h='<ul class="list">';
-  list.forEach(function(e){
-    var d=new Date(e.date+'T12:00:00');
-    var day=d.getDate(),mon=d.toLocaleDateString('de-DE',{month:'short'});
-    var sub,right;
-    if(e.type==='payment'){
-      var to=Object.keys(e.splits)[0];
-      sub=esc(nm(g,e.payer))+' zahlte '+esc(nm(g,to));
-      right='<div class="r muted"><b>'+eur(e.amount)+'</b>Zahlung</div>';
-    }else{
-      sub=esc(nm(g,e.payer))+' zahlte '+eur(e.amount);
-      var delta=me?((e.payer===me?e.amount:0)-(e.splits[me]||0)):0;
-      if(!me||(delta===0&&!(me in e.splits)&&e.payer!==me))right='<div class="r muted">Nicht beteiligt</div>';
-      else right='<div class="r '+balCls(delta)+'"><b>'+eur(delta)+'</b>'+(delta>0?'Du bekommst':(delta<0?'Du schuldest':'Ausgeglichen'))+'</div>';
-    }
-    h+='<li><button class="item" data-a="edit" data-id="'+esc(e.id)+'"><div class="left"><div class="date"><b>'+day+'</b>'+esc(mon)+'</div><div><div class="t">'+esc(e.desc)+'</div><div class="s">'+sub+'</div></div></div>'+right+'</button></li>';
-  });
-  return h+'</ul>';
+  var list=g.expenses.slice().sort(function(a,b){return a.date<b.date?1:(a.date>b.date?-1:(b.ts||0)-(a.ts||0))}).filter(function(e){return matchE(g,e,false)});
+  var h='';
+  if(norm(q.text).trim())h+=summaryHtml(list.length,list.reduce(function(a,e){return a+(e.type==='expense'?e.amount:0)},0));
+  if(!list.length)return h+'<div class="empty"><b>Keine Treffer</b>Es passt keine Ausgabe zu deiner Suche.</div>';
+  return h+'<ul class="list">'+list.map(function(e){return expenseRow(g,e,'edit',false)}).join('')+'</ul>';
 }
+function searchResults(){
+  var t=norm(q.text).trim();
+  if(!t)return '<div class="empty"><b>Alles durchsuchen</b>Suche nach Beschreibung, Person, Betrag, Datum oder Gruppe, zum Beispiel Hecker oder 118.</div>';
+  var hits=[];
+  state.groups.forEach(function(g){g.expenses.forEach(function(e){if(matchE(g,e,true))hits.push({g:g,e:e})})});
+  hits.sort(function(a,b){return a.e.date<b.e.date?1:(a.e.date>b.e.date?-1:(b.e.ts||0)-(a.e.ts||0))});
+  var sum=hits.reduce(function(a,x){return a+(x.e.type==='expense'?x.e.amount:0)},0);
+  var h=summaryHtml(hits.length,sum);
+  if(!hits.length)return h+'<div class="empty"><b>Keine Treffer</b>Es passt nichts zu deiner Suche.</div>';
+  return h+'<ul class="list">'+hits.map(function(x){return expenseRow(x.g,x.e,'searchOpen',true)}).join('')+'</ul>';
+}
+function searchView(){
+  var h='<div class="top"><button class="back" data-a="searchBack"><span aria-hidden="true">‹</span>Zurück</button><span class="brand">Suche</span></div>';
+  h+='<input class="sbox" id="sq" data-q="1" type="search" placeholder="In allen Gruppen suchen" value="'+esc(q.text)+'" autocomplete="off" aria-label="Suche">';
+  return h+'<div id="sres">'+searchResults()+'</div>';
+}
+
 function balanceView(g){
   var b=balances(g),me=meId(g);
   var max=Math.max.apply(null,[1].concat(Object.keys(b).map(function(k){return Math.abs(b[k])})));
@@ -628,7 +704,7 @@ function moreSheet(g){
 }
 function pickGroupSheet(){
   var h='<div class="grab"></div><h2>Für welche Gruppe?</h2><ul class="list">';
-  state.groups.forEach(function(g){
+  sortedGroups().forEach(function(g){
     h+='<li><button class="item grp" data-a="pickGroup" data-id="'+esc(g.id)+'"><span class="ico" style="background:'+esc(g.color||'#1F5C4A')+'">'+esc(g.name.charAt(0).toUpperCase())+'</span><span class="gbody"><span class="gtop"><span class="t">'+esc(g.name)+'</span></span></span></button></li>';
   });
   return h+'</ul><div class="acts"><button class="btn ghost" data-a="close">Abbrechen</button></div>';
@@ -655,7 +731,7 @@ function whoSheet(){
 }
 function backupSheet(){
   var json=JSON.stringify(state);
-  return '<div class="grab"></div><h2>Sicherung</h2><p class="muted" style="margin-top:0;font-size:14px">Kopiere den Text unten als Sicherung. Mit "Daten laden" spielst du eine Sicherung wieder ein.</p><label>Daten<textarea id="bdata" spellcheck="false">'+esc(json)+'</textarea></label><div class="acts"><button class="btn ghost" data-a="copyBackup">Kopieren</button><button class="btn" data-a="loadBackup">Daten laden</button></div><div class="acts"><button class="btn ghost" data-a="restoreSeed">'+(confirmDel?'Wirklich eintragen':'Startdaten neu eintragen')+'</button></div><div class="acts"><button class="btn ghost" data-a="close">Schließen</button></div>';
+  return '<div class="grab"></div><h2>Sicherung</h2>'+autoBackupHtml()+'<p class="muted" style="margin-top:0;font-size:14px">Kopiere den Text unten als Sicherung. Mit "Daten laden" spielst du eine Sicherung wieder ein.</p><label>Daten<textarea id="bdata" spellcheck="false">'+esc(json)+'</textarea></label><div class="acts"><button class="btn ghost" data-a="copyBackup">Kopieren</button><button class="btn" data-a="loadBackup">Daten laden</button></div><div class="acts"><button class="btn ghost" data-a="restoreSeed">'+(confirmDel?'Wirklich eintragen':'Startdaten neu eintragen')+'</button></div><div class="acts"><button class="btn ghost" data-a="close">Schließen</button></div>';
 }
 function renderSheet(){
   var p=$('#panel'),s=$('#scrim');
@@ -671,7 +747,7 @@ function renderSheet(){
   if(sheet==='expense')updateHint();
 }
 function renderApp(){
-  $('#app').innerHTML=ui.view==='stat'?statView():(ui.view==='home'?homeView():groupView());
+  $('#app').innerHTML=ui.view==='search'?searchView():(ui.view==='stat'?statView():(ui.view==='home'?homeView():groupView()));
   $('#bar').hidden=!(ready&&!sheet&&state.groups.length>0&&((ui.view==='group'&&G())||ui.view==='home'));
   if(ready&&!prefs.meName&&state.groups.length&&!sheet){sheet='who';renderSheet()}
 }
@@ -710,15 +786,27 @@ var A={
   statBack:function(){ui.view=ui.from||'home';render();window.scrollTo(0,0)},
   syear:function(d){st.year=+d.y;render()},
   sfilter:function(d){st.filter=d.id;render()},
-  home:function(){ui={view:'home',gid:null,tab:'ausgaben',showSettled:ui.showSettled};render()},
-  open:function(d){ui.view='group';ui.gid=d.id;ui.tab='ausgaben';render();window.scrollTo(0,0)},
+  home:function(){q.text='';ui={view:'home',gid:null,tab:'ausgaben',showSettled:ui.showSettled};render()},
+  search:function(){q.text='';ui.view='search';render();var i=$('#sq');if(i)i.focus();window.scrollTo(0,0)},
+  searchBack:function(){q.text='';ui.view='home';render();window.scrollTo(0,0)},
+  searchOpen:function(d){q.text='';ui.view='group';ui.gid=d.g;ui.tab='ausgaben';A.edit({id:d.id})},
+  open:function(d){q.text='';ui.view='group';ui.gid=d.id;ui.tab='ausgaben';render();window.scrollTo(0,0)},
   tab:function(d){ui.tab=d.t;render()},
   toggleSettled:function(){ui.showSettled=!ui.showSettled;render()},
   who:function(){sheet='who';render()},
   setWho:function(d){prefs.meName=d.n;savePrefs();sheet=null;render()},
   newGroup:function(){sheet='group';confirmDel=false;render()},
-  close:function(){sheet=null;form=null;confirmDel=false;render()},
-  backup:function(){sheet='backup';confirmDel=false;render()},
+  close:function(){sheet=null;form=null;confirmDel=false;confirmRestore=null;render()},
+  backup:function(){sheet='backup';confirmDel=false;confirmRestore=null;render();loadBackupList()},
+  restoreBackup:function(d){
+    if(confirmRestore!==d.d){confirmRestore=d.d;renderSheet();return}
+    confirmRestore=null;
+    bdoc(d.d).get().then(function(s){
+      var gs=s.exists&&s.data().value&&s.data().value.groups;
+      if(!gs){toast('Diese Sicherung wurde nicht gefunden');return}
+      return dref().set({value:{groups:gs},updatedAt:Date.now()}).then(function(){sheet=null;render();toast('Sicherung vom '+dayLabel(d.d)+' zurückgespielt')});
+    }).catch(werr);
+  },
   restoreSeed:function(){
     if(!confirmDel){confirmDel=true;renderSheet();return}
     seedLocal().groups.forEach(function(sg){
@@ -800,6 +888,7 @@ var A={
     }
     rec.id=f.id||('e'+uid());
     rec.ts=f.ts||Date.now();
+    rec.mts=Date.now();
     putExpense(g,rec);
     sheet=null;form=null;render();toast('Gespeichert');
   },
@@ -835,7 +924,9 @@ document.addEventListener('change',function(e){
   if(t.dataset&&t.dataset.t&&form){form.sel[t.dataset.t]=t.checked;renderSheet()}
 });
 document.addEventListener('input',function(e){
-  var t=e.target;if(!form||!t.dataset)return;
+  var t=e.target;
+  if(t&&t.dataset&&t.dataset.q!==undefined){q.text=t.value;var el=$('#sres')||$('#glist');if(el)el.innerHTML=(ui.view==='search')?searchResults():expenseList(G());return}
+  if(!form||!t.dataset)return;
   if(t.dataset.f){form[t.dataset.f]=t.value;updateHint()}
   else if(t.dataset.r){form.raw[t.dataset.r]=t.value;updateHint()}
 });
