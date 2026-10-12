@@ -41,9 +41,10 @@ body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);font
 button,input,select,textarea{font:inherit;color:inherit}
 button{cursor:pointer}
 :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
-#app{max-width:560px;margin:0 auto;padding:20px 18px 120px}
+#app{max-width:560px;margin:0 auto;padding:6px 18px 120px}
+:root.emb{padding-top:0}
 h1,h2,h3{font-family:var(--serif);font-weight:600;margin:0;letter-spacing:-0.01em}
-.top{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:40px}
+.top{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:36px}
 .top .r2{display:flex;gap:12px;flex-wrap:nowrap}
 .link{background:none;border:0;padding:8px 0;color:var(--accent);font-weight:500;font-size:14px;white-space:nowrap}
 .brand{font-family:var(--serif);font-weight:700;font-size:19px;white-space:nowrap}
@@ -151,6 +152,9 @@ textarea{min-height:120px;resize:vertical}
 .opt .tx span{display:block;font-size:14px}
 .opt .ck{color:var(--accent);font-size:20px}
 .band{background:var(--soft);margin:0 -20px 4px;padding:14px 20px;text-align:center;font-size:15px}
+.back{display:inline-flex;align-items:center;gap:6px;padding:9px 16px 9px 12px;border:1px solid var(--line);border-radius:999px;background:var(--surface);color:var(--ink);font-weight:600;font-size:15px;white-space:nowrap;box-shadow:0 1px 2px rgba(0,0,0,.12)}
+.back span{font-size:22px;line-height:1;margin-top:-2px;color:var(--accent)}
+.back:active{background:var(--soft)}
 </style>
 </head>
 <body>
@@ -437,7 +441,7 @@ function statData(){
 }
 function statView(){
   var d=statData();
-  var h='<div class="top"><button class="link" data-a="statBack">Zurück</button><span class="brand">Statistik</span></div>';
+  var h='<div class="top"><button class="back" data-a="statBack"><span aria-hidden="true">‹</span>Zurück</button><span class="brand">Statistik</span></div>';
   h+='<div class="chips">'+d.ylist.map(function(y){return '<button class="'+(String(y)===String(st.year)?'on':'')+'" data-a="syear" data-y="'+y+'">'+y+'</button>'}).join('')+'</div>';
   h+='<div class="chips" style="margin-top:8px"><button class="'+(st.filter==='all'?'on':'')+'" data-a="sfilter" data-id="all">Alle Gruppen</button>'+state.groups.map(function(g){return '<button class="'+(st.filter===g.id?'on':'')+'" data-a="sfilter" data-id="'+esc(g.id)+'">'+esc(g.name)+'</button>'}).join('')+'</div>';
   h+='<div class="hero"><div class="small">Zusammen ausgegeben '+st.year+'</div><div class="big">'+eur(d.total)+'</div></div>';
@@ -494,7 +498,7 @@ function groupView(){
   var g=G();if(!g){ui.view='home';return homeView()}
   var me=meId(g),b=myBal(g);
   var spent=g.expenses.filter(function(e){return e.type==='expense'}).reduce(function(a,e){return a+e.amount},0);
-  var h='<div class="top"><button class="link" data-a="home">Zurück</button><div class="r2"><button class="link" data-a="stat" data-id="'+esc(g.id)+'">Statistik</button><button class="link" data-a="members">Gruppe verwalten</button></div></div>';
+  var h='<div class="top"><button class="back" data-a="home"><span aria-hidden="true">‹</span>Zurück</button><div class="r2"><button class="link" data-a="stat" data-id="'+esc(g.id)+'">Statistik</button><button class="link" data-a="members">Gruppe verwalten</button></div></div>';
   h+='<div class="hero"><h1>'+esc(g.name)+'</h1><div class="big '+balCls(b)+'">'+eur(b)+'</div><div class="small">'+(me?balText(b)+' · ':'Dein Name ist hier kein Mitglied · ')+'Gesamtausgaben '+eur(spent)+'</div></div>';
   h+='<div class="tabs" role="tablist"><button class="tab" role="tab" data-a="tab" data-t="ausgaben" aria-selected="'+(ui.tab==='ausgaben')+'">Ausgaben</button><button class="tab" role="tab" data-a="tab" data-t="salden" aria-selected="'+(ui.tab==='salden')+'">Salden</button></div>';
   h+=ui.tab==='ausgaben'?expenseList(g):balanceView(g);
@@ -818,6 +822,7 @@ document.addEventListener('input',function(e){
   else if(t.dataset.r){form.raw[t.dataset.r]=t.value;updateHint()}
 });
 document.addEventListener('keydown',function(e){if(e.key==='Escape'&&sheet&&sheet!=='who')A.close()});
+try{if(window.self!==window.top)document.documentElement.classList.add('emb')}catch(e){document.documentElement.classList.add('emb')}
 loadPrefsLocal();
 render();
 initStorage();
