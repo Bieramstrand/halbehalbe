@@ -44,25 +44,27 @@ button{cursor:pointer}
 #app{max-width:560px;margin:0 auto;padding:20px 18px 120px}
 h1,h2,h3{font-family:var(--serif);font-weight:600;margin:0;letter-spacing:-0.01em}
 .top{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:40px}
-.top .r2{display:flex;gap:16px}
-.link{background:none;border:0;padding:8px 0;color:var(--accent);font-weight:500}
-.brand{font-family:var(--serif);font-weight:700;font-size:20px}
-.hero{padding:26px 0 22px;border-bottom:1px solid var(--line)}
+.top .r2{display:flex;gap:12px;flex-wrap:nowrap}
+.link{background:none;border:0;padding:8px 0;color:var(--accent);font-weight:500;font-size:14px;white-space:nowrap}
+.brand{font-family:var(--serif);font-weight:700;font-size:19px;white-space:nowrap}
+.hero{padding:18px 0 16px;border-bottom:1px solid var(--line)}
 .hero .small{color:var(--muted);font-size:14px}
-.big{font-family:var(--serif);font-weight:700;font-size:56px;line-height:1.05;letter-spacing:-0.02em;margin:6px 0 4px;font-variant-numeric:lining-nums}
+.big{font-family:var(--serif);font-weight:700;font-size:30px;line-height:1.1;letter-spacing:-0.01em;margin:4px 0 2px;font-variant-numeric:lining-nums}
+.head{font-size:19px;font-weight:600;padding:20px 0 16px;border-bottom:1px solid var(--line);line-height:1.3}
+.head b{font-family:var(--serif);font-weight:700;white-space:nowrap}
 .plus{color:var(--plus)} .minus{color:var(--minus)} .muted{color:var(--muted)}
-.hero h1{font-size:30px}
+.hero h1{font-size:24px}
 .list{list-style:none;margin:0;padding:0}
 .item{display:flex;justify-content:space-between;align-items:center;gap:14px;width:100%;text-align:left;background:none;border:0;border-bottom:1px solid var(--line);padding:15px 0}
-.item .t{font-weight:600}
+.item .t{font-weight:600;font-size:16px}
 .item .s{color:var(--muted);font-size:14px;margin-top:1px}
 .item .r{text-align:right;font-size:14px;white-space:nowrap}
-.item .r b{display:block;font-family:var(--serif);font-size:17px;font-weight:600}
+.item .r b{display:block;font-family:var(--serif);font-size:16px;font-weight:600}
 .grp{align-items:flex-start}
-.ico{flex:none;width:52px;height:52px;border-radius:14px;display:flex;align-items:center;justify-content:center;color:#fff;font-family:var(--serif);font-weight:700;font-size:24px}
+.ico{flex:none;width:44px;height:44px;border-radius:12px;display:flex;align-items:center;justify-content:center;color:#fff;font-family:var(--serif);font-weight:700;font-size:20px}
 .gbody{flex:1;min-width:0;display:block}
-.gtop{display:flex;justify-content:space-between;align-items:center;gap:12px;min-height:52px}
-.gbody .s{display:block;margin-top:2px;font-size:15px}
+.gtop{display:flex;justify-content:space-between;align-items:center;gap:12px;min-height:44px}
+.gbody .s{display:block;margin-top:2px;font-size:14px}
 .date{width:44px;flex:none;text-align:center;color:var(--muted);font-size:12px;line-height:1.2}
 .date b{display:block;font-family:var(--serif);font-size:20px;color:var(--ink);font-weight:600}
 .left{display:flex;align-items:center;gap:12px;min-width:0}
@@ -77,12 +79,12 @@ h1,h2,h3{font-family:var(--serif);font-weight:600;margin:0;letter-spacing:-0.01e
 .btn.danger{background:transparent;border-color:var(--minus);color:var(--minus)}
 .btn.sm{padding:8px 14px;font-size:14px;border-radius:10px}
 .btn:disabled{opacity:.4;cursor:not-allowed}
-.bar{position:fixed;left:0;right:0;bottom:0;padding:12px 18px calc(12px + env(safe-area-inset-bottom,0px));background:linear-gradient(to top,var(--bg) 70%,transparent)}
-.bar .btn{display:flex;width:100%;max-width:560px;margin:0 auto}
+.bar{position:fixed;left:0;right:0;bottom:0;display:flex;justify-content:flex-end;padding:12px max(18px,calc((100vw - 560px)/2 + 18px)) calc(14px + env(safe-area-inset-bottom,0px));pointer-events:none}
+.bar .btn{display:flex;pointer-events:auto;border-radius:999px;padding:14px 22px;box-shadow:0 6px 18px rgba(0,0,0,.28)}
 .balrow{display:flex;justify-content:space-between;align-items:center;padding:14px 0;border-bottom:1px solid var(--line)}
 .track{height:4px;background:var(--soft);border-radius:2px;margin-top:8px;overflow:hidden}
 .track i{display:block;height:100%;border-radius:2px}
-.sec{font-family:var(--serif);font-size:20px;margin:26px 0 4px}
+.sec{font-family:var(--serif);font-size:18px;margin:22px 0 2px}
 .sug{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:14px 0;border-bottom:1px solid var(--line)}
 .sug p{margin:0}
 .sync{margin-top:28px;font-size:13px;color:var(--muted);text-align:center}
@@ -261,7 +263,7 @@ function seedLocal(){
     if(amt){var sp={},raw={};sp.m_christian=amt;raw.m_christian=toStr(amt);g.expenses.push({id:'e_start',type:'expense',desc:desc,amount:amt,payer:'m_julia',splits:sp,mode:'exact',raw:raw,date:'2026-10-12',ts:1791789447652})}
     return g;
   }
-  return {groups:[mk('g_darlehen','Darlehen SF 5%','#8E2640',1,false,1030000,'Darlehen'),mk('g_haushalt','Haushalt','#C0432A',2,false,2577904,'Offener Betrag'),mk('g_solo','Ausgabe ohne Gruppe','#3FA58A',3,true,0,'')]};
+  return {groups:[mk('g_darlehen','Darlehen SF 5%','#8E2640',1,false,1030000,'Darlehen'),mk('g_haushalt','Haushalt','#C0432A',2,false,2572004,'Offener Betrag'),mk('g_solo','Ausgabe ohne Gruppe','#3FA58A',3,true,0,'')]};
 }
 function startLocal(){
   cloud=null;
@@ -458,7 +460,7 @@ function homeView(){
   var total=0;state.groups.forEach(function(g){total+=myBal(g)});
   var has=state.groups.length>0;
   var sentence=!has?'Noch keine Gruppen':(total<0?'Insgesamt schuldest du':(total>0?'Insgesamt bekommst du':'Insgesamt bist du quitt'));
-  h+='<div class="hero"><div class="small">'+sentence+'</div><div class="big '+balCls(total)+'">'+eur(has?total:0)+'</div></div>';
+  h+='<div class="head">'+sentence+(has&&Math.abs(total)>0?' <b class="'+balCls(total)+'">'+eur(total)+'</b>':'')+'</div>';
   if(!has){
     h+='<div class="empty"><b>Teile Kosten fair auf</b>Lege eine Gruppe an, zum Beispiel für den Urlaub, die WG oder den Grillabend. Alle Ausgaben landen an einem Ort und die App rechnet aus, wer wem wie viel schuldet.</div>';
   }else{
