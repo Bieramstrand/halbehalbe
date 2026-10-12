@@ -142,6 +142,15 @@ textarea{min-height:120px;resize:vertical}
 .mrow .ml{font-size:14px;color:var(--muted)}
 .mrow .mv{text-align:right;font-size:14px;font-family:var(--serif)}
 .track.stk{display:flex}
+.opt{display:flex;align-items:center;gap:14px;width:100%;text-align:left;background:none;border:0;border-top:1px solid var(--line);padding:14px 2px}
+.avs{display:flex;flex:none;min-width:68px}
+.av{width:38px;height:38px;border-radius:50%;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:600;font-size:15px;border:2px solid var(--surface)}
+.av+.av{margin-left:-12px}
+.av.pay{box-shadow:0 0 0 2px var(--accent)}
+.opt .tx{flex:1;font-size:16px;line-height:1.35}
+.opt .tx span{display:block;font-size:14px}
+.opt .ck{color:var(--accent);font-size:20px}
+.band{background:var(--soft);margin:0 -20px 4px;padding:14px 20px;text-align:center;font-size:15px}
 </style>
 </head>
 <body>
@@ -535,12 +544,15 @@ function balanceView(g){
 function opts(g,sel){return g.members.map(function(m){return '<option value="'+esc(m.id)+'"'+(m.id===sel?' selected':'')+'>'+esc(m.name)+'</option>'}).join('')}
 function pillText(g,f){
   var me=meId(g),who=f.payer===me?'dir':nm(g,f.payer);
-  var n=g.members.filter(function(m){return f.sel[m.id]}).length,all=n===g.members.length;
+  var sel=g.members.filter(function(m){return f.sel[m.id]}),n=sel.length,all=n===g.members.length;
+  if(f.mode==='equal'&&n===1&&sel[0].id!==f.payer)return 'Gezahlt von '+who+', komplett für '+(sel[0].id===me?'dich':sel[0].name);
   var how=f.mode==='equal'?(all?'gleichmäßig geteilt':'gleichmäßig unter '+n+' Personen geteilt'):(f.mode==='exact'?'nach Beträgen geteilt':(f.mode==='percent'?'nach Prozent geteilt':'nach Anteilen geteilt'));
   return 'Gezahlt von '+who+' und '+how;
 }
 function expenseSheet(g){
   var f=form,isP=f.type==='payment';
+  if(!isP&&f.page==='split')return splitSheet(g);
+  if(!isP&&f.page==='more')return moreSheet(g);
   var title=isP?(f.id?'Zahlung bearbeiten':'Zahlung erfassen'):(f.id?'Ausgabe bearbeiten':'Ausgabe hinzufügen');
   var h='<div class="grab"></div><div class="shead"><button class="circ" data-a="close" aria-label="Abbrechen">✕</button><h2>'+title+'</h2><button class="circ ok" id="save" data-a="saveForm" aria-label="Speichern">✓</button></div>';
   if(isP){
@@ -550,8 +562,49 @@ function expenseSheet(g){
     h+='<p class="with">Mit dir und: <span class="chip">Alle aus '+esc(g.name)+'</span></p>';
     h+='<div class="fld"><span class="ic">≡</span><input data-f="desc" value="'+esc(f.desc)+'" placeholder="Beschreibung eingeben" autocomplete="off" aria-label="Beschreibung"></div>';
     h+='<div class="fld"><span class="ic">€</span><input class="amt" data-f="amount" inputmode="decimal" value="'+esc(f.amount)+'" placeholder="0,00" autocomplete="off" aria-label="Betrag in Euro"></div>';
-    h+='<button class="pill" id="pill" data-a="toggleDetails" aria-expanded="'+(!!f.open)+'">'+esc(pillText(g,f))+'</button>';
-    if(f.open){
+    h+='<button class="pill" id="pill" data-a="openSplit">'+esc(pillText(g,f))+'</button>';
+  }
+  h+='<div class="hint" id="hint"></div>';
+  h+='<label class="dline">Datum<input type="date" data-f="date" value="'+esc(f.date)+'"></label>';
+  if(f.id)h+='<div style="text-align:center;margin-top:14px"><button class="link" style="color:var(--minus)" data-a="delExpense">'+(confirmDel?'Wirklich löschen':(isP?'Zahlung löschen':'Ausgabe löschen'))+'</button></div>';
+  return h;
+}
+
+function sameSet(a,b){return a.length===b.length&&a.every(function(x){return b.indexOf(x)>=0})}
+function avatar(g,id,pay){
+  var i=g.members.findIndex(function(m){return m.id===id}),n=nm(g,id);
+  return '<span class="av'+(pay?' pay':'')+'" style="background:'+COLORS[(i<0?0:i)%COLORS.length]+'">'+esc(n.charAt(0).toUpperCase())+'</span>';
+}
+function splitSheet(g){
+  var f=form,me=meId(g)||g.members[0].id,total=parseAmt(f.amount);
+  var ids=g.members.map(function(m){return m.id}),two=g.members.length===2;
+  var cur=ids.filter(function(k){return f.sel[k]});
+  var payers=[me].concat(ids.filter(function(k){return k!==me}));
+  var h='<div class="grab"></div><div class="shead"><button class="circ" data-a="splitBack" aria-label="Zurück">✕</button><h2>Ausgabendetails</h2><span></span></div><div class="band">Wie wurde diese Ausgabe aufgeteilt?</div>';
+  payers.forEach(function(p){
+    [false,true].forEach(function(whole){
+      if(whole&&!two)return;
+      var sel=whole?ids.filter(function(k){return k!==p}):ids;
+      var w={};sel.forEach(function(k){w[k]=1});
+      var d=total>0?distribute(total,w):null;
+      var name=nm(g,p),title,sub='',cls='';
+      if(p===me)title=whole?'Du bekommst den gesamten Betrag.':'Du hast bezahlt, gleichmäßig aufteilen.';
+      else title=whole?name+' bekommt den gesamten Betrag.':name+' hat bezahlt, gleichmäßig aufteilen.';
+      if(d){
+        if(p===me){var owed=total-(d[p]||0);sub=(two?nm(g,ids.filter(function(k){return k!==me})[0])+' schuldet dir ':'Die anderen schulden dir ')+eur(owed)+'.';cls='plus'}
+        else{sub='Du schuldest '+name+' '+eur(d[me]||0)+'.';cls='minus'}
+      }
+      var on=f.payer===p&&f.mode==='equal'&&sameSet(cur,sel);
+      var other=p===me?(two?ids.filter(function(k){return k!==me})[0]:null):me;
+      h+='<button class="opt" data-a="splitPick" data-p="'+esc(p)+'" data-w="'+(whole?'1':'0')+'"><span class="avs">'+avatar(g,p,true)+(other?avatar(g,other,false):'')+'</span><span class="tx">'+esc(title)+(sub?'<span class="'+cls+'">'+esc(sub)+'</span>':'')+'</span>'+(on?'<span class="ck">✓</span>':'')+'</button>';
+    });
+  });
+  h+='<div style="text-align:center;margin-top:18px"><button class="btn ghost" data-a="moreSplit">Mehr Optionen</button></div>';
+  return h;
+}
+function moreSheet(g){
+  var f=form;
+  var h='<div class="grab"></div><div class="shead"><button class="circ" data-a="splitBack" aria-label="Zurück">✕</button><h2>Mehr Optionen</h2><span></span></div>';
       h+='<div style="margin-top:14px"><label>Bezahlt von<select data-f="payer">'+opts(g,f.payer)+'</select></label>';
       var modes=[['equal','Gleich'],['exact','Beträge'],['percent','Prozent'],['shares','Anteile']];
       h+='<div class="seg">'+modes.map(function(m){return '<button type="button" data-a="mode" data-m="'+m[0]+'" aria-pressed="'+(f.mode===m[0])+'">'+m[1]+'</button>'}).join('')+'</div><ul class="people">';
@@ -564,11 +617,7 @@ function expenseSheet(g){
         h+='<li class="person"><label><input type="checkbox" data-t="'+esc(m.id)+'"'+(on?' checked':'')+'>'+esc(m.name)+'</label>'+inp+(f.mode!=='exact'?'<span class="sh" id="sh'+esc(m.id)+'"></span>':'')+'</li>';
       });
       h+='</ul></div>';
-    }
-  }
-  h+='<div class="hint" id="hint"></div>';
-  h+='<label class="dline">Datum<input type="date" data-f="date" value="'+esc(f.date)+'"></label>';
-  if(f.id)h+='<div style="text-align:center;margin-top:14px"><button class="link" style="color:var(--minus)" data-a="delExpense">'+(confirmDel?'Wirklich löschen':(isP?'Zahlung löschen':'Ausgabe löschen'))+'</button></div>';
+  h+='<div class="hint" id="hint"></div><div class="acts"><button class="btn" data-a="splitBack">Fertig</button></div>';
   return h;
 }
 function groupSheet(){
@@ -616,6 +665,7 @@ function render(){renderApp();renderSheet()}
 function updateHint(){
   var g=G();if(!g||!form)return;
   var total=parseAmt(form.amount),ok,hint=$('#hint');
+  if(!hint)return;
   if(form.type==='payment'){
     ok=total>0&&form.payer!==form.to;
     hint.textContent=form.payer===form.to?'Zahler und Empfänger müssen verschieden sein.':'';
@@ -704,6 +754,14 @@ var A={
     var raw=JSON.parse(JSON.stringify(e.raw||{}));
     form={id:e.id,type:e.type,desc:e.desc,amount:toStr(e.amount),payer:e.payer,to:e.type==='payment'?Object.keys(e.splits)[0]:'',date:e.date,mode:e.mode||'equal',sel:sel,raw:raw,open:false,ts:e.ts};
     sheet='expense';confirmDel=false;render();
+  },
+  openSplit:function(){form.page='split';renderSheet()},
+  splitBack:function(){form.page=null;renderSheet()},
+  moreSplit:function(){form.page='more';renderSheet()},
+  splitPick:function(d){
+    var g=G(),sel={};
+    g.members.forEach(function(m){if(d.w==='1'?m.id!==d.p:true)sel[m.id]=true});
+    form.payer=d.p;form.sel=sel;form.mode='equal';form.raw={};form.page=null;renderSheet();
   },
   mode:function(d){form.mode=d.m;renderSheet()},
   saveForm:function(){
