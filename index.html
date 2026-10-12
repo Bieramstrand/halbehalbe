@@ -41,8 +41,9 @@ body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);font
 button,input,select,textarea{font:inherit;color:inherit}
 button{cursor:pointer}
 :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
-#app{max-width:560px;margin:0 auto;padding:6px 18px 120px}
+#app{max-width:560px;margin:0 auto;padding:34px 18px 120px}
 :root.emb{padding-top:0}
+:root.emb #app{padding-top:6px}
 h1,h2,h3{font-family:var(--serif);font-weight:600;margin:0;letter-spacing:-0.01em}
 .top{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:36px}
 .top .r2{display:flex;gap:12px;flex-wrap:nowrap}
@@ -155,6 +156,7 @@ textarea{min-height:120px;resize:vertical}
 .back{display:inline-flex;align-items:center;gap:6px;padding:9px 16px 9px 12px;border:1px solid var(--line);border-radius:999px;background:var(--surface);color:var(--ink);font-weight:600;font-size:15px;white-space:nowrap;box-shadow:0 1px 2px rgba(0,0,0,.12)}
 .back span{font-size:22px;line-height:1;margin-top:-2px;color:var(--accent)}
 .back:active{background:var(--soft)}
+.bar[hidden]{display:none}
 </style>
 </head>
 <body>
@@ -468,7 +470,7 @@ function statView(){
 
 /* Ansichten */
 function homeView(){
-  var h='<div class="top"><span class="brand">Halbe Halbe</span><div class="r2"><button class="link" data-a="stat">Statistik</button><button class="link" data-a="who">'+(prefs.meName?'Ich: '+esc(prefs.meName):'Wer bin ich?')+'</button><button class="link" data-a="backup">Sicherung</button></div></div>';
+  var h='<div class="top"><span class="brand">Halbe Halbe</span><div class="r2"><button class="link" data-a="stat">Statistik</button><button class="link" data-a="who">'+(prefs.meName?'Ich: '+esc(prefs.meName):'Wer bin ich?')+'</button></div></div>';
   if(!ready)return h+'<div class="empty"><b>Lade Daten</b>Einen Moment bitte.</div>';
   var total=0;state.groups.forEach(function(g){total+=myBal(g)});
   var has=state.groups.length>0;
@@ -491,7 +493,7 @@ function homeView(){
     }
   }
   h+='<div style="margin-top:24px"><button class="btn'+(has?' ghost':'')+'" style="width:100%" data-a="newGroup">Gruppe erstellen</button></div>';
-  h+='<div class="sync">'+(cloud?'Synchronisiert mit allen, die diese App öffnen.':(cfgOk()?'Offline: nur auf diesem Gerät gespeichert.':'Nur auf diesem Gerät gespeichert. Firebase Zugang fehlt noch.'))+'</div>';
+  h+='<div class="sync">'+(cloud?'Synchronisiert mit allen, die diese App öffnen.':(cfgOk()?'Offline: nur auf diesem Gerät gespeichert.':'Nur auf diesem Gerät gespeichert. Firebase Zugang fehlt noch.'))+'<br><button class="link" data-a="backup">Sicherung</button></div>';
   return h;
 }
 function groupView(){
@@ -624,6 +626,13 @@ function moreSheet(g){
   h+='<div class="hint" id="hint"></div><div class="acts"><button class="btn" data-a="splitBack">Fertig</button></div>';
   return h;
 }
+function pickGroupSheet(){
+  var h='<div class="grab"></div><h2>Für welche Gruppe?</h2><ul class="list">';
+  state.groups.forEach(function(g){
+    h+='<li><button class="item grp" data-a="pickGroup" data-id="'+esc(g.id)+'"><span class="ico" style="background:'+esc(g.color||'#1F5C4A')+'">'+esc(g.name.charAt(0).toUpperCase())+'</span><span class="gbody"><span class="gtop"><span class="t">'+esc(g.name)+'</span></span></span></button></li>';
+  });
+  return h+'</ul><div class="acts"><button class="btn ghost" data-a="close">Abbrechen</button></div>';
+}
 function groupSheet(){
   return '<div class="grab"></div><h2>Neue Gruppe</h2><label>Name der Gruppe<input id="gname" placeholder="Zum Beispiel Urlaub Italien" autocomplete="off"></label><label>Mitglieder, durch Komma getrennt. Du wirst automatisch ergänzt.<textarea id="gmem" placeholder="Anna, Ben"></textarea></label><div class="acts"><button class="btn ghost" data-a="close">Abbrechen</button><button class="btn" data-a="saveGroup">Gruppe anlegen</button></div>';
 }
@@ -656,13 +665,14 @@ function renderSheet(){
   else if(sheet==='group')h=groupSheet();
   else if(sheet==='members'&&g)h=membersSheet(g);
   else if(sheet==='backup')h=backupSheet();
+  else if(sheet==='pickgroup')h=pickGroupSheet();
   else if(sheet==='who')h=whoSheet();
   p.innerHTML=h;p.classList.add('on');s.classList.add('on');p.scrollTop=top;
   if(sheet==='expense')updateHint();
 }
 function renderApp(){
   $('#app').innerHTML=ui.view==='stat'?statView():(ui.view==='home'?homeView():groupView());
-  $('#bar').hidden=!(ready&&ui.view==='group'&&G()&&!sheet);
+  $('#bar').hidden=!(ready&&!sheet&&state.groups.length>0&&((ui.view==='group'&&G())||ui.view==='home'));
   if(ready&&!prefs.meName&&state.groups.length&&!sheet){sheet='who';renderSheet()}
 }
 function render(){renderApp();renderSheet()}
@@ -749,7 +759,15 @@ var A={
     persistGroup(g);
     ui={view:'group',gid:g.id,tab:'ausgaben',showSettled:false};sheet=null;render();
   },
-  addExpense:function(){var g=G();form=newForm(g,'expense');sheet='expense';confirmDel=false;render()},
+  addExpense:function(){
+    if(ui.view==='home'||!G()){
+      if(!state.groups.length){toast('Lege zuerst eine Gruppe an');return}
+      if(state.groups.length>1){sheet='pickgroup';confirmDel=false;render();return}
+      ui.gid=state.groups[0].id;
+    }
+    var g=G();form=newForm(g,'expense');sheet='expense';confirmDel=false;render();
+  },
+  pickGroup:function(d){ui.gid=d.id;form=newForm(G(),'expense');sheet='expense';confirmDel=false;render()},
   toggleDetails:function(){form.open=!form.open;renderSheet()},
   pay:function(d){var g=G();form=newForm(g,'payment',{payer:d.from,to:d.to,amount:toStr(parseInt(d.amt,10))});sheet='expense';render()},
   edit:function(d){
