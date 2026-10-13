@@ -1,8 +1,9 @@
-// Liest einen Kassenbon per Claude Vision und gibt Händler, Datum, Summe und Positionen als JSON zurück.
-// Benötigt in Netlify die Umgebungsvariable ANTHROPIC_API_KEY.
-// Optional: BELEG_MODEL (Standard: claude-haiku-5-5, schneller; für genauere Ergebnisse z. B. claude-sonnet-5-5).
+// Liest einen Kassenbon per KI und gibt Händler, Datum, Summe und Positionen als JSON zurück.
+// Anbieter: Perplexity (Variable PERPLEXITY_API_KEY) oder Claude (Variable ANTHROPIC_API_KEY).
+// Optional: BELEG_PROVIDER = perplexity oder anthropic, BELEG_MODEL = Modellname.
+// Standard: Perplexity, wenn PERPLEXITY_API_KEY gesetzt ist, sonst Claude.
 
-const PROMPT = `Du liest einen Kassenbon oder eine Rechnung auf dem Foto. Antworte ausschließlich mit einem JSON Objekt, ohne Markdown und ohne Erklärung, in genau dieser Form:
+const PROMPT = `Du liest einen Kassenbon oder eine Rechnung auf dem Foto. Nutze keine Websuche, lies nur das Foto. Antworte ausschließlich mit einem JSON Objekt, ohne Markdown und ohne Erklärung, in genau dieser Form:
 {"haendler":"kurzer Name des Geschäfts","datum":"YYYY-MM-DD","gesamt":0.00,"positionen":[{"name":"Artikel","preis":0.00}]}
 Regeln:
 - Beträge als Zahl in Euro mit Punkt als Dezimaltrenner.
@@ -15,10 +16,55 @@ Regeln:
 const headers = { "Content-Type": "application/json", "Cache-Control": "no-store" };
 const reply = (statusCode, obj) => ({ statusCode, headers, body: JSON.stringify(obj) });
 
+async function viaPerplexity(img, mediaType) {
+  const r = await fetch("https://api.perplexity.ai/chat/completions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: "Bearer " + process.env.PERPLEXITY_API_KEY },
+    body: JSON.stringify({
+      model: process.env.BELEG_MODEL || "sonar",
+      temperature: 0,
+      max_tokens: 1500,
+      messages: [{
+        role: "user",
+        content: [
+          { type: "text", text: PROMPT },
+          { type: "image_url", image_url: { url: `data:${mediaType};base64,${img}` } }
+        ]
+      }]
+    })
+  });
+  const j = await r.json();
+  if (!r.ok) throw Object.assign(new Error("Perplexity Fehler"), { detail: (j && (j.error && (j.error.message || j.error))) || r.status });
+  return (j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content) || "";
+}
+
+async function viaClaude(img, mediaType) {
+  const r = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-api-key": process.env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01" },
+    body: JSON.stringify({
+      model: process.env.BELEG_MODEL || "claude-haiku-5-5",
+      max_tokens: 1500,
+      messages: [{
+        role: "user",
+        content: [
+          { type: "image", source: { type: "base64", media_type: mediaType, data: img } },
+          { type: "text", text: PROMPT }
+        ]
+      }]
+    })
+  });
+  const j = await r.json();
+  if (!r.ok) throw Object.assign(new Error("Claude Fehler"), { detail: (j && j.error && j.error.message) || r.status });
+  return (j.content || []).filter((c) => c.type === "text").map((c) => c.text).join("");
+}
+
 exports.handler = async (event) => {
   if (event.httpMethod !== "POST") return reply(405, { error: "POST erforderlich" });
-  const key = process.env.ANTHROPIC_API_KEY;
-  if (!key) return reply(500, { error: "ANTHROPIC_API_KEY fehlt" });
+
+  const provider = process.env.BELEG_PROVIDER || (process.env.PERPLEXITY_API_KEY ? "perplexity" : "anthropic");
+  if (provider === "perplexity" && !process.env.PERPLEXITY_API_KEY) return reply(500, { error: "PERPLEXITY_API_KEY fehlt" });
+  if (provider === "anthropic" && !process.env.ANTHROPIC_API_KEY) return reply(500, { error: "ANTHROPIC_API_KEY fehlt" });
 
   let body;
   try { body = JSON.parse(event.body || "{}"); } catch (e) { return reply(400, { error: "Ungültige Anfrage" }); }
@@ -27,27 +73,10 @@ exports.handler = async (event) => {
   const mediaType = ["image/jpeg", "image/png", "image/webp"].includes(body.mediaType) ? body.mediaType : "image/jpeg";
 
   try {
-    const r = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-api-key": key, "anthropic-version": "2023-06-01" },
-      body: JSON.stringify({
-        model: process.env.BELEG_MODEL || "claude-haiku-5-5",
-        max_tokens: 1500,
-        messages: [{
-          role: "user",
-          content: [
-            { type: "image", source: { type: "base64", media_type: mediaType, data: img } },
-            { type: "text", text: PROMPT }
-          ]
-        }]
-      })
-    });
-    const j = await r.json();
-    if (!r.ok) return reply(502, { error: "Claude Fehler", detail: (j && j.error && j.error.message) || r.status });
-    const text = (j.content || []).filter((c) => c.type === "text").map((c) => c.text).join("");
-    const m = text.match(/\{[\s\S]*\}/);
-    if (!m) return reply(502, { error: "Keine Antwort lesbar" });
-    const d = JSON.parse(m[0]);
+    const text = provider === "perplexity" ? await viaPerplexity(img, mediaType) : await viaClaude(img, mediaType);
+    const start = text.indexOf("{"), end = text.lastIndexOf("}");
+    if (start < 0 || end <= start) return reply(502, { error: "Keine Antwort lesbar" });
+    const d = JSON.parse(text.slice(start, end + 1));
     const positionen = (Array.isArray(d.positionen) ? d.positionen : [])
       .map((p) => ({ name: String((p && p.name) || "").slice(0, 80), preis: Number(p && p.preis) }))
       .filter((p) => p.name && isFinite(p.preis));
@@ -58,6 +87,6 @@ exports.handler = async (event) => {
       positionen
     });
   } catch (e) {
-    return reply(500, { error: "Beleg konnte nicht gelesen werden" });
+    return reply(500, { error: "Beleg konnte nicht gelesen werden", detail: e.detail || String(e.message || e) });
   }
 };
