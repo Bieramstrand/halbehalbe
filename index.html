@@ -174,6 +174,12 @@ textarea{min-height:120px;resize:vertical}
 .sit select{margin-top:6px;width:auto;padding:6px 10px;font-size:14px;color:var(--muted)}
 .sit .x{background:none;border:0;color:var(--muted);font-size:18px;padding:6px}
 [hidden],input[type=file]{display:none !important}
+.brow{display:flex;gap:12px;padding:12px 0;border-bottom:1px solid var(--line)}
+.brow .bmain{flex:1;min-width:0}
+.brow input,.brow select{margin:6px 0 0;padding:9px 10px;font-size:15px}
+.brow input[type=checkbox]{width:22px;height:22px;margin:12px 0 0;padding:0;accent-color:var(--accent);flex:none}
+.brow .row2{gap:8px}
+.brow .sm{margin-top:6px}
 </style>
 </head>
 <body>
@@ -191,7 +197,7 @@ window.HH_SCAN_URL='/.netlify/functions/beleg';
 </script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
-<input type="file" id="scanfile" accept="image/*" hidden>
+<input type="file" id="scanfile" accept="image/*" multiple hidden>
 <div id="app"></div>
 <div id="bar" class="bar" hidden><button class="btn" data-a="addExpense">Ausgabe hinzufügen</button></div>
 <div id="scrim" class="scrim" data-a="close"></div>
@@ -651,6 +657,7 @@ function pillText(g,f){
 }
 function expenseSheet(g){
   var f=form,isP=f.type==='payment';
+  if(!isP&&f.page==='batch')return batchSheet(g);
   if(!isP&&(f.page==='scanning'||f.page==='scanned'))return scanSheet(g);
   if(!isP&&f.page==='split')return splitSheet(g);
   if(!isP&&f.page==='more')return moreSheet(g);
@@ -751,28 +758,118 @@ function readImage(file,cb){
   };
   fr.readAsDataURL(file);
 }
+var demoN=0;
 function demoScan(){
+  demoN++;
+  function ago(n){var d=new Date();d.setDate(d.getDate()-n);return new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString().slice(0,10)}
+  if(demoN%2===0)return new Promise(function(res){setTimeout(function(){res({belege:[
+    {haendler:'Bäckerei Sonnenschein',datum:ago(1),gesamt:6.48,positionen:[]},
+    {haendler:'Shell Tankstelle',datum:ago(2),gesamt:58.2,positionen:[]},
+    {haendler:'Pizzeria Roma',datum:ago(3),gesamt:42,positionen:[]}]})},1300)});
   var items=[['Bio Vollmilch',1.29],['Spaghetti 500g',1.59],['Tomaten passiert',0.99],['Parmigiano',4.99],['Olivenöl nativ',7.49],['Rotwein',5.29],['Pfand Rückgabe',-0.75]];
   var sum=items.reduce(function(a,i){return a+i[1]},0);
   return new Promise(function(res){setTimeout(function(){res({haendler:'REWE',datum:today(),gesamt:Math.round(sum*100)/100,positionen:items.map(function(i){return {name:i[0],preis:i[1]}})})},1300)});
 }
-function runScan(dataUrl){
-  var tok=++scanTok;
-  form.page='scanning';renderSheet();
-  var p=(window.HH_SCAN_URL==='demo')?demoScan():fetch(window.HH_SCAN_URL,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({image:String(dataUrl).split(',')[1],mediaType:'image/jpeg'})}).then(function(r){return r.json().catch(function(){return {}}).then(function(j){if(!r.ok){var e=new Error('http '+r.status);e.detail=(j&&(j.detail||j.error))||('Status '+r.status);throw e}return j})});
-  p.then(function(d){
-    if(tok!==scanTok||!form||form.page!=='scanning')return;
-    var items=(Array.isArray(d.positionen)?d.positionen:[]).filter(function(i){return i&&i.name!=null}).map(function(i){return {name:String(i.name),price:toStr(Math.round((+i.preis||0)*100)),who:'all'}});
-    var sumC=items.reduce(function(a,i){return a+parseSigned(i.price)},0);
-    var gAbs=Math.abs(+d.gesamt||0),tot=gAbs>0?Math.round(gAbs*100):sumC;
-    form.scan={totalTouched:items.length>0&&tot!==sumC,desc:String(d.haendler||''),date:/^\d{4}-\d{2}-\d{2}$/.test(d.datum||'')?d.datum:today(),total:tot>0?toStr(tot):'',payer:form.payer,items:items};
-    form.page='scanned';renderSheet();
-  }).catch(function(e){
-    if(tok!==scanTok||!form)return;
-    form.page=null;renderSheet();
-    var why=String((e&&(e.detail||e.message))||'').replace(/\s+/g,' ').slice(0,140);
-    toast('Beleg lesen fehlgeschlagen'+(why?': '+why:'')+'. Versuche ein schärferes Foto.',7000);
+function postScan(dataUrl){
+  return fetch(window.HH_SCAN_URL,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({image:String(dataUrl).split(',')[1],mediaType:'image/jpeg'})}).then(function(r){
+    return r.json().catch(function(){return {}}).then(function(j){
+      if(!r.ok){var e=new Error('http '+r.status);e.detail=(j&&(j.detail||j.error))||('Status '+r.status);throw e}
+      return j;
+    });
   });
+}
+function toDocs(d,payer){
+  var list=(d&&Array.isArray(d.belege)&&d.belege.length)?d.belege:[d||{}],out=[];
+  list.forEach(function(x){
+    var items=(Array.isArray(x.positionen)?x.positionen:[]).filter(function(i){return i&&i.name!=null}).map(function(i){return {name:String(i.name),price:toStr(Math.round((+i.preis||0)*100)),who:'all'}});
+    var sumC=items.reduce(function(a,i){return a+parseSigned(i.price)},0);
+    var gAbs=Math.abs(+x.gesamt||0),tot=gAbs>0?Math.round(gAbs*100):sumC;
+    if(!x.haendler&&!tot&&!items.length)return;
+    out.push({on:true,totalTouched:items.length>0&&tot!==sumC,desc:String(x.haendler||''),date:/^\d{4}-\d{2}-\d{2}$/.test(x.datum||'')?x.datum:today(),total:tot>0?toStr(tot):'',payer:payer,items:items});
+  });
+  return out;
+}
+function scanOne(file){
+  var p=(window.HH_SCAN_URL==='demo')?demoScan():new Promise(function(res,rej){readImage(file,function(err,url){if(err)rej(err);else res(url)})}).then(postScan);
+  return p.then(function(d){return toDocs(d,form?form.payer:null)});
+}
+function progText(){
+  var p=form&&form.scanProg;
+  return p&&p.n>1?'Beleg '+p.i+' von '+p.n+' wird gelesen …':'Der Beleg wird gelesen …';
+}
+function updateProg(){var el=$('#scanprog');if(el)el.textContent=progText()}
+function runScanFiles(files){
+  var tok=++scanTok,docs=[],failed=0,lastWhy='',n=files.length,i=0;
+  form.page='scanning';form.scanProg={i:1,n:n};renderSheet();
+  function finish(){
+    if(tok!==scanTok||!form)return;
+    form.scanProg=null;
+    if(!docs.length){
+      form.page=null;renderSheet();
+      toast('Beleg lesen fehlgeschlagen'+(lastWhy?': '+lastWhy:'')+'. Versuche ein schärferes Foto.',7000);
+      return;
+    }
+    if(docs.length===1){form.scan=docs[0];form.page='scanned'}
+    else{form.batch={docs:docs};form.page='batch'}
+    renderSheet();
+    if(failed)toast(failed+(failed===1?' Foto konnte':' Fotos konnten')+' nicht gelesen werden',5000);
+  }
+  function next(){
+    if(tok!==scanTok||!form)return;
+    if(i>=n){finish();return}
+    form.scanProg={i:i+1,n:n};updateProg();
+    var f=files[i++];
+    scanOne(f).then(function(ds){
+      docs=docs.concat(ds);
+      if(!ds.length){failed++;lastWhy='nichts erkannt'}
+      next();
+    }).catch(function(e){
+      failed++;lastWhy=String((e&&(e.detail||e.message))||'').replace(/\s+/g,' ').slice(0,140);
+      next();
+    });
+  }
+  next();
+}
+function scanBuild(g,sc){
+  var c=scanCalc(g,sc),T=c.total;
+  if(T<=0)return null;
+  var sel={},raw={},mode='equal',splits=null,w={};
+  c.ids.forEach(function(k){w[k]=1});
+  if(c.allEq||!sc.items.length){splits=distribute(T,w);c.ids.forEach(function(k){sel[k]=true})}
+  else{
+    var w2={};c.ids.forEach(function(k){w2[k]=Math.max(0,c.per[k])});
+    var sp=distribute(T,w2);
+    if(!sp){splits=distribute(T,w);c.ids.forEach(function(k){sel[k]=true})}
+    else{mode='exact';splits=sp;c.ids.forEach(function(k){if(sp[k]>0){sel[k]=true;raw[k]=toStr(sp[k])}})}
+  }
+  if(!splits)return null;
+  return {desc:(sc.desc||'').trim()||'Einkauf',amount:T,date:sc.date||today(),payer:sc.payer||g.members[0].id,mode:mode,splits:splits,raw:raw,sel:sel};
+}
+function putMany(g,recs){
+  if(typeof editGroups==='function'&&cloud){
+    var list=g.expenses.slice();recs.forEach(function(r){list.push(r)});g.expenses=list;
+    editGroups(function(gs){var t=findG(gs,g.id);if(!t)return gs;var arr=t.expenses||[];recs.forEach(function(r){arr.push(clone(r))});t.expenses=arr;return gs});
+  }else recs.forEach(function(r){putExpense(g,r)});
+}
+function batchSheet(g){
+  var b=form.batch;
+  var h='<div class="grab"></div><div class="shead"><button class="circ" data-a="batchCancel" aria-label="Abbrechen">✕</button><h2>Belege prüfen</h2><button class="circ ok" data-a="batchApply" aria-label="Anlegen">✓</button></div>';
+  h+='<p class="muted" style="margin:0 0 6px;font-size:14px">'+b.docs.length+' Ausgaben erkannt. Nimm den Haken weg, was du nicht brauchst, ändere Werte und lege alles mit dem Haken oben an.</p>';
+  b.docs.forEach(function(d,i){
+    h+='<div class="brow"><input type="checkbox" data-bi="'+i+'" data-bk="on"'+(d.on?' checked':'')+' aria-label="Übernehmen"><div class="bmain">'
+      +'<input data-bi="'+i+'" data-bk="desc" value="'+esc(d.desc)+'" placeholder="Beschreibung" autocomplete="off" aria-label="Beschreibung">'
+      +'<div class="row2"><input data-bi="'+i+'" data-bk="total" inputmode="decimal" value="'+esc(d.total)+'" placeholder="0,00" autocomplete="off" aria-label="Betrag in Euro"><input type="date" data-bi="'+i+'" data-bk="date" value="'+esc(d.date)+'" aria-label="Datum"></div>'
+      +'<div class="row2"><select data-bi="'+i+'" data-bk="payer" aria-label="Bezahlt von">'+opts(g,d.payer||g.members[0].id)+'</select>'
+      +(d.items.length?'<button class="btn ghost sm" data-a="batchOpen" data-i="'+i+'">Positionen ('+d.items.length+')</button>':'<span></span>')+'</div></div></div>';
+  });
+  return h+'<div class="hint" id="bsum" style="text-align:left"></div>';
+}
+function updateBatch(){
+  var g=G(),b=form&&form.batch;if(!g||!b)return;
+  var sel=b.docs.filter(function(x){return x.on}),sum=0;
+  sel.forEach(function(x){sum+=scanCalc(g,x).total});
+  var el=$('#bsum');if(el)el.textContent=sel.length+' von '+b.docs.length+' ausgewählt'+(sum?', zusammen '+eur(sum):'');
+  var ok=$('[data-a=batchApply]');if(ok)ok.disabled=!sel.length;
 }
 function spread(c,ids){
   var w={};ids.forEach(function(k){w[k]=1});
@@ -807,7 +904,7 @@ function updateScan(){
 function scanSheet(g){
   var f=form,sc=f.scan;
   var head=function(title,ok){return '<div class="grab"></div><div class="shead"><button class="circ" data-a="scanCancel" aria-label="Abbrechen">✕</button><h2>'+title+'</h2>'+(ok?'<button class="circ ok" data-a="scanApply" aria-label="Übernehmen">✓</button>':'<span></span>')+'</div>'};
-  if(f.page==='scanning')return head('Beleg lesen',false)+'<div class="empty"><b>Einen Moment</b>Der Beleg wird gelesen …</div>';
+  if(f.page==='scanning')return head('Beleg lesen',false)+'<div class="empty"><b>Einen Moment</b><span id="scanprog">'+progText()+'</span></div>';
   var h=head('Beleg prüfen',true);
   h+='<p class="muted" style="margin:0 0 12px;font-size:14px">Prüfe die erkannten Werte und ändere, was nicht stimmt. Danach siehst du die Ausgabe noch einmal und speicherst sie mit dem Haken.</p>';
   h+='<label>Beschreibung<input data-sf="desc" value="'+esc(sc.desc)+'" autocomplete="off"></label>';
@@ -856,7 +953,7 @@ function renderSheet(){
   else if(sheet==='pickgroup')h=pickGroupSheet();
   else if(sheet==='who')h=whoSheet();
   p.innerHTML=h;p.classList.add('on');s.classList.add('on');p.scrollTop=top;
-  if(sheet==='expense'){updateHint();if(form&&form.page==='scanned')updateScan()}
+  if(sheet==='expense'){updateHint();if(form&&form.page==='scanned')updateScan();if(form&&form.page==='batch')updateBatch()}
 }
 function renderApp(){
   $('#app').innerHTML=ui.view==='search'?searchView():(ui.view==='stat'?statView():(ui.view==='home'?homeView():groupView()));
@@ -979,25 +1076,36 @@ var A={
   },
   scan:function(){
     if(!window.HH_SCAN_URL){toast('Beleg lesen ist hier nicht eingerichtet');return}
-    if(window.HH_SCAN_URL==='demo'){runScan(null);return}
+    if(window.HH_SCAN_URL==='demo'){runScanFiles([null]);return}
     var fi=$('#scanfile');if(fi){fi.value='';fi.click()}
   },
-  scanCancel:function(){scanTok++;form.page=null;form.scan=null;renderSheet()},
+  scanCancel:function(){
+    if(form.fromBatch){form.fromBatch=false;form.scan=null;form.page='batch';renderSheet();return}
+    scanTok++;form.page=null;form.scan=null;form.batch=null;renderSheet();
+  },
   scanAdd:function(){form.scan.items.push({name:'',price:'',who:'all'});renderSheet()},
   scanDel:function(d){form.scan.items.splice(+d.i,1);syncTotal();renderSheet()},
   scanApply:function(){
-    var g=G(),sc=form.scan,c=scanCalc(g,sc),T=c.total;
-    if(T<=0){toast('Bitte einen Gesamtbetrag eintragen');return}
-    var sel={},raw={},mode='equal';
-    if(c.allEq||!sc.items.length){g.members.forEach(function(m){sel[m.id]=true})}
-    else{
-      var w={};c.ids.forEach(function(k){w[k]=Math.max(0,c.per[k])});
-      var sp=distribute(T,w);
-      if(!sp){g.members.forEach(function(m){sel[m.id]=true})}
-      else{mode='exact';c.ids.forEach(function(k){if(sp[k]>0){sel[k]=true;raw[k]=toStr(sp[k])}})}
+    if(form.fromBatch){form.fromBatch=false;form.scan=null;form.page='batch';renderSheet();return}
+    var g=G(),b=scanBuild(g,form.scan);
+    if(!b){toast('Bitte einen Gesamtbetrag eintragen');return}
+    form.desc=b.desc;form.amount=toStr(b.amount);form.date=b.date;form.payer=b.payer;form.mode=b.mode;form.sel=b.sel;form.raw=b.raw;
+    form.page=null;form.scan=null;renderSheet();
+  },
+  batchCancel:function(){scanTok++;form.page=null;form.batch=null;form.scan=null;form.fromBatch=false;renderSheet()},
+  batchOpen:function(d){form.scan=form.batch.docs[+d.i];form.fromBatch=true;form.page='scanned';renderSheet()},
+  batchApply:function(){
+    var g=G(),docs=form.batch.docs.filter(function(x){return x.on});
+    if(!docs.length){toast('Wähle mindestens einen Beleg aus');return}
+    var recs=[],now=Date.now();
+    for(var i=0;i<docs.length;i++){
+      var b=scanBuild(g,docs[i]);
+      if(!b){toast('Bei '+(docs[i].desc||('Beleg '+(i+1)))+' fehlt der Betrag');return}
+      recs.push({id:'e'+uid(),type:'expense',desc:b.desc,amount:b.amount,payer:b.payer,splits:b.splits,mode:b.mode,raw:b.raw,date:b.date,ts:now+i,mts:now+i});
     }
-    form.desc=(sc.desc||'').trim()||'Einkauf';form.amount=toStr(T);form.date=sc.date||today();form.payer=sc.payer;
-    form.mode=mode;form.sel=sel;form.raw=raw;form.page=null;form.scan=null;renderSheet();
+    putMany(g,recs);
+    sheet=null;form=null;render();
+    toast(recs.length+(recs.length===1?' Ausgabe':' Ausgaben')+' angelegt');
   },
   openSplit:function(){form.page='split';renderSheet()},
   splitBack:function(){form.page=null;renderSheet()},
@@ -1055,15 +1163,23 @@ document.addEventListener('click',function(e){
 });
 document.addEventListener('change',function(e){
   var t=e.target;
-  if(t.id==='scanfile'&&t.files&&t.files[0]&&form){
-    readImage(t.files[0],function(err,data){if(err||!form){toast('Das Bild konnte nicht gelesen werden');return}runScan(data)});
+  if(t.id==='scanfile'&&t.files&&t.files.length&&form){
+    var fl=Array.prototype.slice.call(t.files,0,8);
+    if(t.files.length>8)toast('Es werden die ersten 8 Fotos gelesen');
+    runScanFiles(fl);
     return;
   }
+  if(form&&form.batch&&form.page==='batch'&&t.dataset&&t.dataset.bk==='on'){form.batch.docs[+t.dataset.bi].on=t.checked;updateBatch();return}
   if(t.dataset&&t.dataset.t&&form){form.sel[t.dataset.t]=t.checked;renderSheet()}
 });
 document.addEventListener('input',function(e){
   var t=e.target;
   if(t&&t.dataset&&t.dataset.q!==undefined){q.text=t.value;var el=$('#sres')||$('#glist');if(el)el.innerHTML=(ui.view==='search')?searchResults():expenseList(G());return}
+  if(form&&form.batch&&form.page==='batch'&&t.dataset&&t.dataset.bi!==undefined){
+    var bd=form.batch.docs[+t.dataset.bi],bk=t.dataset.bk;
+    if(bk==='on')bd.on=t.checked;else{bd[bk]=t.value;if(bk==='total')bd.totalTouched=true}
+    updateBatch();return;
+  }
   if(form&&form.scan&&t.dataset){
     if(t.dataset.sf){form.scan[t.dataset.sf]=t.value;if(t.dataset.sf==='total')form.scan.totalTouched=true;updateScan();return}
     if(t.dataset.si!==undefined){form.scan.items[+t.dataset.si][t.dataset.sk]=t.value;syncTotal();updateScan();return}
