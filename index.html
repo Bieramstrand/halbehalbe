@@ -167,6 +167,12 @@ textarea{min-height:120px;resize:vertical}
 .foot{display:flex;justify-content:center;gap:28px;margin-top:28px;flex-wrap:wrap}
 .foot .link{font-size:15px}
 .foot+.sync{margin-top:8px}
+.scanbtn{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;margin:0 0 16px;padding:11px;border:1px dashed var(--accent);border-radius:12px;background:transparent;color:var(--accent);font-weight:600}
+.sit{padding:8px 0;border-bottom:1px solid var(--line)}
+.sit1{display:grid;grid-template-columns:1fr 88px 36px;gap:8px;align-items:center}
+.sit input,.sit select{margin:0;padding:9px 10px;font-size:15px}
+.sit select{margin-top:6px;width:auto;padding:6px 10px;font-size:14px;color:var(--muted)}
+.sit .x{background:none;border:0;color:var(--muted);font-size:18px;padding:6px}
 </style>
 </head>
 <body>
@@ -180,9 +186,11 @@ window.HH_FIREBASE_CONFIG={
   messagingSenderId:'443725141758',
   appId:'1:443725141758:web:64331ff8100f27acd037af'
 };
+window.HH_SCAN_URL='/.netlify/functions/beleg';
 </script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<input type="file" id="scanfile" accept="image/*" hidden>
 <div id="app"></div>
 <div id="bar" class="bar" hidden><button class="btn" data-a="addExpense">Ausgabe hinzufügen</button></div>
 <div id="scrim" class="scrim" data-a="close"></div>
@@ -642,6 +650,7 @@ function pillText(g,f){
 }
 function expenseSheet(g){
   var f=form,isP=f.type==='payment';
+  if(!isP&&(f.page==='scanning'||f.page==='scanned'))return scanSheet(g);
   if(!isP&&f.page==='split')return splitSheet(g);
   if(!isP&&f.page==='more')return moreSheet(g);
   var title=isP?(f.id?'Zahlung bearbeiten':'Zahlung erfassen'):(f.id?'Ausgabe bearbeiten':'Ausgabe hinzufügen');
@@ -651,6 +660,7 @@ function expenseSheet(g){
     h+='<div class="row2"><label>Von<select data-f="payer">'+opts(g,f.payer)+'</select></label><label>An<select data-f="to">'+opts(g,f.to)+'</select></label></div>';
   }else{
     h+='<p class="with">Mit dir und: <span class="chip">Alle aus '+esc(g.name)+'</span></p>';
+    if(!f.id&&window.HH_SCAN_URL)h+='<button class="scanbtn" data-a="scan">Beleg scannen</button>';
     h+='<div class="fld"><span class="ic">≡</span><input data-f="desc" value="'+esc(f.desc)+'" placeholder="Beschreibung eingeben" autocomplete="off" aria-label="Beschreibung"></div>';
     h+='<div class="fld"><span class="ic">€</span><input class="amt" data-f="amount" inputmode="decimal" value="'+esc(f.amount)+'" placeholder="0,00" autocomplete="off" aria-label="Betrag in Euro"></div>';
     h+='<button class="pill" id="pill" data-a="openSplit">'+esc(pillText(g,f))+'</button>';
@@ -718,6 +728,96 @@ function pickGroupSheet(){
   });
   return h+'</ul><div class="acts"><button class="btn ghost" data-a="close">Abbrechen</button></div>';
 }
+
+/* Beleg scannen */
+var scanTok=0;
+function parseSigned(s){var n=parseFloat(String(s||'').replace(/\s/g,'').replace(',','.'));return isFinite(n)?Math.round(n*100):0}
+function readImage(file,cb){
+  var fr=new FileReader();
+  fr.onerror=function(){cb(new Error('Datei nicht lesbar'))};
+  fr.onload=function(){
+    var img=new Image();
+    img.onload=function(){
+      try{
+        var max=1600,sc=Math.min(1,max/Math.max(img.width,img.height)),c=document.createElement('canvas');
+        c.width=Math.max(1,Math.round(img.width*sc));c.height=Math.max(1,Math.round(img.height*sc));
+        c.getContext('2d').drawImage(img,0,0,c.width,c.height);
+        cb(null,c.toDataURL('image/jpeg',0.82));
+      }catch(e){cb(null,fr.result)}
+    };
+    img.onerror=function(){cb(new Error('Bild nicht lesbar'))};
+    img.src=fr.result;
+  };
+  fr.readAsDataURL(file);
+}
+function demoScan(){
+  var items=[['Bio Vollmilch',1.29],['Spaghetti 500g',1.59],['Tomaten passiert',0.99],['Parmigiano',4.99],['Olivenöl nativ',7.49],['Rotwein',5.29],['Pfand Rückgabe',-0.75]];
+  var sum=items.reduce(function(a,i){return a+i[1]},0);
+  return new Promise(function(res){setTimeout(function(){res({haendler:'REWE',datum:today(),gesamt:Math.round(sum*100)/100,positionen:items.map(function(i){return {name:i[0],preis:i[1]}})})},1300)});
+}
+function runScan(dataUrl){
+  var tok=++scanTok;
+  form.page='scanning';renderSheet();
+  var p=(window.HH_SCAN_URL==='demo')?demoScan():fetch(window.HH_SCAN_URL,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({image:String(dataUrl).split(',')[1],mediaType:'image/jpeg'})}).then(function(r){if(!r.ok)throw new Error('http '+r.status);return r.json()});
+  p.then(function(d){
+    if(tok!==scanTok||!form||form.page!=='scanning')return;
+    var items=(Array.isArray(d.positionen)?d.positionen:[]).filter(function(i){return i&&i.name!=null}).map(function(i){return {name:String(i.name),price:toStr(Math.round((+i.preis||0)*100)),who:'all'}});
+    var sumC=items.reduce(function(a,i){return a+parseSigned(i.price)},0);
+    var tot=+d.gesamt>0?Math.round(+d.gesamt*100):sumC;
+    form.scan={totalTouched:items.length>0&&tot!==sumC,desc:String(d.haendler||''),date:/^\d{4}-\d{2}-\d{2}$/.test(d.datum||'')?d.datum:today(),total:tot>0?toStr(tot):'',payer:form.payer,items:items};
+    form.page='scanned';renderSheet();
+  }).catch(function(){
+    if(tok!==scanTok||!form)return;
+    form.page=null;renderSheet();toast('Der Beleg konnte nicht gelesen werden. Versuche ein schärferes Foto.');
+  });
+}
+function spread(c,ids){
+  var w={};ids.forEach(function(k){w[k]=1});
+  var d=distribute(Math.abs(c),w)||{};
+  ids.forEach(function(k){d[k]=(d[k]||0)*(c<0?-1:1)});
+  return d;
+}
+function scanCalc(g,sc){
+  var ids=g.members.map(function(m){return m.id}),per={},sum=0,allEq=true;
+  ids.forEach(function(k){per[k]=0});
+  sc.items.forEach(function(i){
+    var c=parseSigned(i.price);sum+=c;
+    if(i.who==='all'||!per.hasOwnProperty(i.who)){var d=spread(c,ids);ids.forEach(function(k){per[k]+=d[k]})}
+    else{per[i.who]+=c;allEq=false}
+  });
+  var tot=parseAmt(sc.total)||sum;
+  return {ids:ids,per:per,sum:sum,total:tot,allEq:allEq};
+}
+function syncTotal(){
+  var g=G();if(!g||!form||!form.scan||form.scan.totalTouched)return;
+  var c=scanCalc(g,form.scan);
+  if(c.sum>0){form.scan.total=toStr(c.sum);var ti=document.querySelector('[data-sf=total]');if(ti)ti.value=form.scan.total}
+}
+function updateScan(){
+  var g=G(),el=$('#scansum');if(!g||!el||!form||!form.scan)return;
+  var c=scanCalc(g,form.scan),t=eur(c.sum)+' ';
+  var txt='Positionen zusammen '+eur(c.sum);
+  if(parseAmt(form.scan.total)&&parseAmt(form.scan.total)!==c.sum&&form.scan.items.length)txt+='. Gesamtbetrag weicht ab, der Unterschied wird anteilig verteilt.';
+  if(!c.allEq)txt+=' Anteile: '+g.members.map(function(m){return m.name+' '+eur(c.per[m.id])}).join(', ')+'.';
+  el.textContent=txt;
+}
+function scanSheet(g){
+  var f=form,sc=f.scan;
+  var head=function(title,ok){return '<div class="grab"></div><div class="shead"><button class="circ" data-a="scanCancel" aria-label="Abbrechen">✕</button><h2>'+title+'</h2>'+(ok?'<button class="circ ok" data-a="scanApply" aria-label="Übernehmen">✓</button>':'<span></span>')+'</div>'};
+  if(f.page==='scanning')return head('Beleg lesen',false)+'<div class="empty"><b>Einen Moment</b>Der Beleg wird gelesen …</div>';
+  var h=head('Beleg prüfen',true);
+  h+='<p class="muted" style="margin:0 0 12px;font-size:14px">Prüfe die erkannten Werte und ändere, was nicht stimmt. Danach siehst du die Ausgabe noch einmal und speicherst sie mit dem Haken.</p>';
+  h+='<label>Beschreibung<input data-sf="desc" value="'+esc(sc.desc)+'" autocomplete="off"></label>';
+  h+='<div class="row2"><label>Gesamtbetrag in Euro<input data-sf="total" inputmode="decimal" value="'+esc(sc.total)+'" autocomplete="off"></label><label>Datum<input type="date" data-sf="date" value="'+esc(sc.date)+'"></label></div>';
+  h+='<label>Bezahlt von<select data-sf="payer">'+opts(g,sc.payer)+'</select></label>';
+  h+='<div style="font-size:14px;color:var(--muted);margin-top:4px">Positionen. Wähle bei jeder, für wen sie ist.</div>';
+  sc.items.forEach(function(it,i){
+    var who='<option value="all"'+(it.who==='all'?' selected':'')+'>Für alle</option>'+g.members.map(function(m){return '<option value="'+esc(m.id)+'"'+(it.who===m.id?' selected':'')+'>Nur '+esc(m.name)+'</option>'}).join('');
+    h+='<div class="sit"><div class="sit1"><input data-si="'+i+'" data-sk="name" value="'+esc(it.name)+'" autocomplete="off" aria-label="Bezeichnung"><input data-si="'+i+'" data-sk="price" inputmode="decimal" value="'+esc(it.price)+'" autocomplete="off" aria-label="Preis"><button class="x" data-a="scanDel" data-i="'+i+'" aria-label="Position entfernen">✕</button></div><select data-si="'+i+'" data-sk="who" aria-label="Für wen">'+who+'</select></div>';
+  });
+  h+='<div style="margin-top:8px"><button class="link" data-a="scanAdd">Position hinzufügen</button></div><div class="hint" id="scansum" style="text-align:left"></div>';
+  return h;
+}
 function groupSheet(){
   return '<div class="grab"></div><h2>Neue Gruppe</h2><label>Name der Gruppe<input id="gname" placeholder="Zum Beispiel Urlaub Italien" autocomplete="off"></label><label>Mitglieder, durch Komma getrennt. Du wirst automatisch ergänzt.<textarea id="gmem" placeholder="Anna, Ben"></textarea></label><div class="acts"><button class="btn ghost" data-a="close">Abbrechen</button><button class="btn" data-a="saveGroup">Gruppe anlegen</button></div>';
 }
@@ -753,7 +853,7 @@ function renderSheet(){
   else if(sheet==='pickgroup')h=pickGroupSheet();
   else if(sheet==='who')h=whoSheet();
   p.innerHTML=h;p.classList.add('on');s.classList.add('on');p.scrollTop=top;
-  if(sheet==='expense')updateHint();
+  if(sheet==='expense'){updateHint();if(form&&form.page==='scanned')updateScan()}
 }
 function renderApp(){
   $('#app').innerHTML=ui.view==='search'?searchView():(ui.view==='stat'?statView():(ui.view==='home'?homeView():groupView()));
@@ -874,6 +974,28 @@ var A={
     form={id:e.id,type:e.type,desc:e.desc,amount:toStr(e.amount),payer:e.payer,to:e.type==='payment'?Object.keys(e.splits)[0]:'',date:e.date,mode:e.mode||'equal',sel:sel,raw:raw,open:false,ts:e.ts};
     sheet='expense';confirmDel=false;render();
   },
+  scan:function(){
+    if(!window.HH_SCAN_URL){toast('Beleg lesen ist hier nicht eingerichtet');return}
+    if(window.HH_SCAN_URL==='demo'){runScan(null);return}
+    var fi=$('#scanfile');if(fi){fi.value='';fi.click()}
+  },
+  scanCancel:function(){scanTok++;form.page=null;form.scan=null;renderSheet()},
+  scanAdd:function(){form.scan.items.push({name:'',price:'',who:'all'});renderSheet()},
+  scanDel:function(d){form.scan.items.splice(+d.i,1);syncTotal();renderSheet()},
+  scanApply:function(){
+    var g=G(),sc=form.scan,c=scanCalc(g,sc),T=c.total;
+    if(T<=0){toast('Bitte einen Gesamtbetrag eintragen');return}
+    var sel={},raw={},mode='equal';
+    if(c.allEq||!sc.items.length){g.members.forEach(function(m){sel[m.id]=true})}
+    else{
+      var w={};c.ids.forEach(function(k){w[k]=Math.max(0,c.per[k])});
+      var sp=distribute(T,w);
+      if(!sp){g.members.forEach(function(m){sel[m.id]=true})}
+      else{mode='exact';c.ids.forEach(function(k){if(sp[k]>0){sel[k]=true;raw[k]=toStr(sp[k])}})}
+    }
+    form.desc=(sc.desc||'').trim()||'Einkauf';form.amount=toStr(T);form.date=sc.date||today();form.payer=sc.payer;
+    form.mode=mode;form.sel=sel;form.raw=raw;form.page=null;form.scan=null;renderSheet();
+  },
   openSplit:function(){form.page='split';renderSheet()},
   splitBack:function(){form.page=null;renderSheet()},
   moreSplit:function(){form.page='more';renderSheet()},
@@ -930,11 +1052,19 @@ document.addEventListener('click',function(e){
 });
 document.addEventListener('change',function(e){
   var t=e.target;
+  if(t.id==='scanfile'&&t.files&&t.files[0]&&form){
+    readImage(t.files[0],function(err,data){if(err||!form){toast('Das Bild konnte nicht gelesen werden');return}runScan(data)});
+    return;
+  }
   if(t.dataset&&t.dataset.t&&form){form.sel[t.dataset.t]=t.checked;renderSheet()}
 });
 document.addEventListener('input',function(e){
   var t=e.target;
   if(t&&t.dataset&&t.dataset.q!==undefined){q.text=t.value;var el=$('#sres')||$('#glist');if(el)el.innerHTML=(ui.view==='search')?searchResults():expenseList(G());return}
+  if(form&&form.scan&&t.dataset){
+    if(t.dataset.sf){form.scan[t.dataset.sf]=t.value;if(t.dataset.sf==='total')form.scan.totalTouched=true;updateScan();return}
+    if(t.dataset.si!==undefined){form.scan.items[+t.dataset.si][t.dataset.sk]=t.value;syncTotal();updateScan();return}
+  }
   if(!form||!t.dataset)return;
   if(t.dataset.f){form[t.dataset.f]=t.value;updateHint()}
   else if(t.dataset.r){form.raw[t.dataset.r]=t.value;updateHint()}
