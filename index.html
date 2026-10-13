@@ -453,7 +453,7 @@ function meId(g){
 function myBal(g){var me=meId(g);return me?(balances(g)[me]||0):0}
 function balText(c){return c>0?'Du bekommst':(c<0?'Du schuldest':'Ausgeglichen')}
 function balCls(c){return c>0?'plus':(c<0?'minus':'muted')}
-function toast(t){var el=$('#toast');el.textContent=t;el.classList.add('on');clearTimeout(toast.t);toast.t=setTimeout(function(){el.classList.remove('on')},2600)}
+function toast(t,ms){var el=$('#toast');el.textContent=t;el.classList.add('on');clearTimeout(toast.t);toast.t=setTimeout(function(){el.classList.remove('on')},ms||2600)}
 function lastAct(g){var m=0;g.expenses.forEach(function(e){var t=e.ts||new Date(e.date+'T12:00:00').getTime();if(t>m)m=t});return m}
 function lastTouch(g){var m=0;g.expenses.forEach(function(e){var t=Math.max(e.mts||0,e.ts||0)||new Date(e.date+'T12:00:00').getTime();if(t>m)m=t});return m}
 function sortedGroups(){return state.groups.slice().sort(function(a,b){var d=lastTouch(b)-lastTouch(a);return d||((a.order||0)-(b.order||0))})}
@@ -759,17 +759,19 @@ function demoScan(){
 function runScan(dataUrl){
   var tok=++scanTok;
   form.page='scanning';renderSheet();
-  var p=(window.HH_SCAN_URL==='demo')?demoScan():fetch(window.HH_SCAN_URL,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({image:String(dataUrl).split(',')[1],mediaType:'image/jpeg'})}).then(function(r){if(!r.ok)throw new Error('http '+r.status);return r.json()});
+  var p=(window.HH_SCAN_URL==='demo')?demoScan():fetch(window.HH_SCAN_URL,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({image:String(dataUrl).split(',')[1],mediaType:'image/jpeg'})}).then(function(r){return r.json().catch(function(){return {}}).then(function(j){if(!r.ok){var e=new Error('http '+r.status);e.detail=(j&&(j.detail||j.error))||('Status '+r.status);throw e}return j})});
   p.then(function(d){
     if(tok!==scanTok||!form||form.page!=='scanning')return;
     var items=(Array.isArray(d.positionen)?d.positionen:[]).filter(function(i){return i&&i.name!=null}).map(function(i){return {name:String(i.name),price:toStr(Math.round((+i.preis||0)*100)),who:'all'}});
     var sumC=items.reduce(function(a,i){return a+parseSigned(i.price)},0);
-    var tot=+d.gesamt>0?Math.round(+d.gesamt*100):sumC;
+    var gAbs=Math.abs(+d.gesamt||0),tot=gAbs>0?Math.round(gAbs*100):sumC;
     form.scan={totalTouched:items.length>0&&tot!==sumC,desc:String(d.haendler||''),date:/^\d{4}-\d{2}-\d{2}$/.test(d.datum||'')?d.datum:today(),total:tot>0?toStr(tot):'',payer:form.payer,items:items};
     form.page='scanned';renderSheet();
-  }).catch(function(){
+  }).catch(function(e){
     if(tok!==scanTok||!form)return;
-    form.page=null;renderSheet();toast('Der Beleg konnte nicht gelesen werden. Versuche ein schärferes Foto.');
+    form.page=null;renderSheet();
+    var why=String((e&&(e.detail||e.message))||'').replace(/\s+/g,' ').slice(0,140);
+    toast('Beleg lesen fehlgeschlagen'+(why?': '+why:'')+'. Versuche ein schärferes Foto.',7000);
   });
 }
 function spread(c,ids){
