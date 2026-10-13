@@ -4,16 +4,15 @@
 // Standard: Perplexity, wenn PERPLEXITY_API_KEY gesetzt ist, sonst Claude.
 
 const makePrompt = () => `Heutiges Datum: ${new Date().toISOString().slice(0, 10)}.
-Du liest einen Kassenbon, eine Rechnung oder einen Eintrag aus einer Banking App auf dem Foto. Nutze keine Websuche, lies nur das Foto. Antworte ausschließlich mit einem JSON Objekt, ohne Markdown und ohne Erklärung, in genau dieser Form:
-{"haendler":"kurzer Name des Geschäfts","datum":"YYYY-MM-DD","gesamt":0.00,"positionen":[{"name":"Artikel","preis":0.00}]}
+Du liest ein Foto oder einen Screenshot mit Kassenbons, Rechnungen oder Kontobuchungen aus einer Banking App. Nutze keine Websuche, lies nur das Bild. Antworte ausschließlich mit einem JSON Objekt, ohne Markdown und ohne Erklärung, in genau dieser Form:
+{"belege":[{"haendler":"kurzer Name","datum":"YYYY-MM-DD","gesamt":0.00,"positionen":[{"name":"Artikel","preis":0.00}]}]}
 Regeln:
-- Beträge als Zahl in Euro mit Punkt als Dezimaltrenner.
+- Jeder voneinander getrennte Beleg oder jede einzelne Kontobuchung ist ein eigener Eintrag in belege. Ein einzelner Kassenbon mit vielen Artikeln ist genau ein Eintrag mit mehreren positionen.
+- Zeigt das Bild zum Beispiel eine Liste von Lastschriften, gib für jede Zeile einen Eintrag mit haendler, datum und gesamt, und lass positionen leer.
+- Beträge als Zahl in Euro mit Punkt als Dezimaltrenner. gesamt immer als positive Zahl, auch wenn auf dem Bild ein Minus steht.
 - positionen enthält nur Artikelzeilen mit ihrem Endpreis (Menge mal Einzelpreis schon verrechnet). Keine Summenzeile, keine MwSt, keine Zahlungsart.
 - Rabatte, Gutscheine und Pfandrückgaben als eigene Position mit negativem Preis.
-- gesamt ist der Gesamtbetrag, den man bezahlt hat, immer als positive Zahl, auch wenn er auf dem Bild mit Minus steht.
-- Steht das Bild ohne Artikelzeilen, zum Beispiel bei einer Kontobuchung, lass positionen leer und fülle haendler, datum und gesamt.
-- Fehlt im Datum das Jahr, nimm das Jahr aus dem heutigen Datum, ohne ein Datum in der Zukunft zu erzeugen.
-- Ist das Datum nicht lesbar, setze datum auf einen leeren Text.
+- Ist das Datum nicht lesbar, setze datum auf einen leeren Text. Fehlt im Datum das Jahr, nimm das Jahr aus dem heutigen Datum, ohne ein Datum in der Zukunft zu erzeugen.
 - Ist etwas nicht lesbar, lasse es weg und rate nicht.`;
 
 function withTimeout(ms) {
@@ -34,7 +33,7 @@ async function viaPerplexity(img, mediaType) {
     body: JSON.stringify({
       model: process.env.BELEG_MODEL || "sonar-pro",
       temperature: 0,
-      max_tokens: 1500,
+      max_tokens: 2500,
       messages: [{
         role: "user",
         content: [
@@ -58,7 +57,7 @@ async function viaClaude(img, mediaType) {
     headers: { "content-type": "application/json", "x-api-key": process.env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01" },
     body: JSON.stringify({
       model: process.env.BELEG_MODEL || "claude-haiku-5-5",
-      max_tokens: 1500,
+      max_tokens: 2500,
       messages: [{
         role: "user",
         content: [
@@ -92,15 +91,16 @@ exports.handler = async (event) => {
     const start = text.indexOf("{"), end = text.lastIndexOf("}");
     if (start < 0 || end <= start) return reply(502, { error: "Keine Antwort lesbar" });
     const d = JSON.parse(text.slice(start, end + 1));
-    const positionen = (Array.isArray(d.positionen) ? d.positionen : [])
-      .map((p) => ({ name: String((p && p.name) || "").slice(0, 80), preis: Number(p && p.preis) }))
-      .filter((p) => p.name && isFinite(p.preis));
-    return reply(200, {
-      haendler: String(d.haendler || "").slice(0, 60),
-      datum: /^\d{4}-\d{2}-\d{2}$/.test(d.datum || "") ? d.datum : "",
-      gesamt: isFinite(Number(d.gesamt)) ? Math.abs(Number(d.gesamt)) : 0,
-      positionen
-    });
+    const rohe = Array.isArray(d.belege) && d.belege.length ? d.belege : [d];
+    const belege = rohe.slice(0, 20).map((b) => ({
+      haendler: String((b && b.haendler) || "").slice(0, 60),
+      datum: /^\d{4}-\d{2}-\d{2}$/.test((b && b.datum) || "") ? b.datum : "",
+      gesamt: isFinite(Number(b && b.gesamt)) ? Math.abs(Number(b.gesamt)) : 0,
+      positionen: (Array.isArray(b && b.positionen) ? b.positionen : [])
+        .map((p) => ({ name: String((p && p.name) || "").slice(0, 80), preis: Number(p && p.preis) }))
+        .filter((p) => p.name && isFinite(p.preis))
+    })).filter((b) => b.haendler || b.gesamt || b.positionen.length);
+    return reply(200, { belege });
   } catch (e) {
     const timedOut = e && e.name === "AbortError";
     return reply(timedOut ? 504 : 500, { error: "Beleg konnte nicht gelesen werden", detail: timedOut ? "Zeitüberschreitung, die KI war zu langsam" : (e.detail || String(e.message || e)) });
