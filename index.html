@@ -216,12 +216,14 @@ var fmt=new Intl.NumberFormat('de-DE',{style:'currency',currency:'EUR'});
 var eur=function(c){return fmt.format(Math.abs(c)/100)};
 function today(){var d=new Date();return new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString().slice(0,10)}
 function parseAmt(s){var n=parseFloat(String(s||'').replace(/\s/g,'').replace(',','.'));return isFinite(n)&&n>0?Math.round(n*100):0}
+function parseExp(s){var n=parseFloat(String(s||'').replace(/\s/g,'').replace(',','.'));return isFinite(n)&&n!==0?Math.round(n*100):0}
 function parseNum(s){var n=parseFloat(String(s||'').replace(',','.'));return isFinite(n)?n:0}
 function toStr(c){return (c/100).toFixed(2).replace('.',',')}
 
 /* Zustand */
-var VERSION='1.7';
+var VERSION='1.8';
 var CHANGES=[
+  {v:'1.8',d:'2026-11-12',t:['Einnahmen aus Kassensturz (negative Beträge) werden als Einnahme angezeigt','Einnahmen lassen sich bearbeiten und speichern']},
   {v:'1.7',d:'2026-10-24',t:['Versionsnummer unten auf der Startseite','Übersicht Was ist neu']},
   {v:'1.6',t:['Mehrere Fotos auf einmal scannen','Mehrere Kontobuchungen auf einem Bild erkennen','Liste Belege prüfen zum Anlegen vieler Ausgaben']},
   {v:'1.5',t:['Beleg scannen mit Vorschau','Positionen einzelnen Personen zuordnen']},
@@ -430,8 +432,13 @@ function distribute(total,weights){
   for(var i=0;rest>0;i=(i+1)%order.length){out[order[i][0]]++;rest--}
   return out;
 }
+/* Negative Beträge sind Einnahmen (zum Beispiel aus Kassensturz): gerechnet wird mit dem Betrag, das Vorzeichen kommt danach auf alle Anteile. */
 function calcSplit(g,f){
-  var total=parseAmt(f.amount);
+  var t=parseExp(f.amount),sg=t<0?-1:1,c=calcSplitAbs(g,f,Math.abs(t));
+  if(sg<0&&c.splits){var n={};for(var k in c.splits)n[k]=-c.splits[k];c.splits=n}
+  return c;
+}
+function calcSplitAbs(g,f,total){
   var ids=g.members.filter(function(m){return f.sel[m.id]}).map(function(m){return m.id});
   if(!ids.length)return {ok:false,hint:'Wähle mindestens eine Person.',bad:true};
   var w={},sum=0,i;
@@ -608,7 +615,9 @@ function expenseRow(g,e,action,showGroup){
     sub=esc(nm(g,e.payer))+' zahlte '+esc(nm(g,to));
     right='<div class="r muted"><b>'+eur(e.amount)+'</b>Zahlung</div>';
   }else{
-    sub=(me&&e.payer===me)?'Du hast '+eur(e.amount)+' gezahlt':esc(nm(g,e.payer))+' zahlte '+eur(e.amount);
+    var inc=e.amount<0;
+    sub=(me&&e.payer===me)?'Du hast '+eur(e.amount)+(inc?' erhalten':' gezahlt'):esc(nm(g,e.payer))+(inc?' erhielt ':' zahlte ')+eur(e.amount);
+    if(inc)sub='Einnahme · '+sub;
     var delta=me?((e.payer===me?e.amount:0)-(e.splits[me]||0)):0;
     if(!me||(delta===0&&!(me in e.splits)&&e.payer!==me))right='<div class="r muted">Nicht beteiligt</div>';
     else right='<div class="r '+balCls(delta)+'"><b>'+eur(delta)+'</b>'+(delta>0?'Du leihst':(delta<0?'Du schuldest':'Ausgeglichen'))+'</div>';
@@ -697,7 +706,7 @@ function avatar(g,id,pay){
   return '<span class="av'+(pay?' pay':'')+'" style="background:'+COLORS[(i<0?0:i)%COLORS.length]+'">'+esc(n.charAt(0).toUpperCase())+'</span>';
 }
 function splitSheet(g){
-  var f=form,me=meId(g)||g.members[0].id,total=parseAmt(f.amount);
+  var f=form,me=meId(g)||g.members[0].id,total=Math.abs(parseExp(f.amount));
   var ids=g.members.map(function(m){return m.id}),two=g.members.length===2;
   var cur=ids.filter(function(k){return f.sel[k]});
   var payers=[me].concat(ids.filter(function(k){return k!==me}));
@@ -991,9 +1000,9 @@ function updateHint(){
     hint.textContent=form.payer===form.to?'Zahler und Empfänger müssen verschieden sein.':'';
     hint.className='hint'+(form.payer===form.to?' bad':'');
   }else{
-    var c=calcSplit(g,form);
-    ok=!!c.ok&&total>0&&form.desc.trim().length>0;
-    hint.textContent=form.open||c.bad?(c.hint||''):'';
+    var c=calcSplit(g,form),inc=parseExp(form.amount)<0;
+    ok=!!c.ok&&parseExp(form.amount)!==0&&form.desc.trim().length>0;
+    hint.textContent=form.open||c.bad?(c.hint||''):(inc?'Einnahme, wird unter den Beteiligten aufgeteilt.':'');
     hint.className='hint'+(c.bad?' bad':'');
     g.members.forEach(function(m){
       var el=document.getElementById('sh'+m.id);
@@ -1139,8 +1148,8 @@ var A={
   },
   mode:function(d){form.mode=d.m;renderSheet()},
   saveForm:function(){
-    var g=G(),f=form,total=parseAmt(f.amount),rec;
-    if(!g||!f||total<=0)return;
+    var g=G(),f=form,total=f&&f.type==='payment'?parseAmt(f.amount):parseExp(f&&f.amount),rec;
+    if(!g||!f||!total)return;
     if(f.type==='payment'){
       if(f.payer===f.to)return;
       var sp={};sp[f.to]=total;
